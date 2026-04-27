@@ -1,2 +1,2 @@
-# mik32_course
+# Electronics simulator mik32
 Симулятор MIK32
