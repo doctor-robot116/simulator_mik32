@@ -1,0 +1,1915 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>K1921VK01T GPIO configuration</title>
+<meta name="author" content="© Клиначев Николай Васильевич, 2022">
+<meta name="keywords" content="микроконтроллер; ARM; Cortex-M4F; К1921ВК01Т; K1921VK01T; GPIO configuration;">
+<meta name="description" content="Прототип интерактивного инструмента, предназначенный для конфигурирования микроконтроллера К1921ВК01Т (ARM Cortex-M4F)"><!--
+Таблица стилей и docheader-скрипт колонтитула сайта (для функционирования приложения не нужны) -->
+<link href="JS/vsstyle.css" rel="stylesheet" type="text/css">
+<script type="text/javascript" defer charset="utf-8" src="JS/docheader.js"></script>
+
+<style type="text/css">
+body  { font-size: 1.30em; font-family: "Times New Roman", serif, sans-serif, Tahoma; }
+h1    { font-size: 1.30em; clear: both; text-align: center; }
+h2    { font-size: 1.25em; color: #DC143C; text-align: center; }
+p.rJJJ   { text-align: justify; text-indent: 1.2em;}
+p.CCCC   { text-align: center; }
+p.RRRR   { text-align: right;  }
+p.author { text-align: right;  }
+p.wrkfl  { text-align: right;  }
+</style>
+
+<script type="text/javascript">
+/*jslint browser, devel, bitwise, long, unordered, white, for */
+!!document.addEventListener && document.addEventListener("DOMContentLoaded", function () {
+    "use strict";
+    // TODO: для поиска TODO
+
+    // Программа была написана для микроконтроллера К1986ВК01GI, который
+    // имеет контроллер портов ввода-вывода (мультиплексор), позволяющий
+    // к каждой монтажной площадке корпуса (BGA144) подключить до 16
+    // выводов периферийных устройств. Спецификация этого микроконтроллера
+    // содержит самую большую таблицу о функциональном назначении ножек
+    // (более 1500 позиций). Данная версия программы адаптирована для более
+    // простого микроконтроллера. Есть парочка неиспользуемых переменных
+    // и непонятных комментариев.
+
+    // Алфавит позиционного кода монтажной площадки корпуса BGA144 (по оси X)
+  //const pinPosNameSet = "ABCDEFGHJKLM"; // пропущена цифра "I"
+    // Внедрённый csv-файл содержит 22 колонки.
+    // Форма визуализации содержит элементы управления, чьи имена заканчиваются
+    // соответствующей цифрой, в системе счисления с равным или большим основанием
+    const RADIX21 = 21;         // Максимальный индекс колонки
+    // Форма c элементами визуализации данных HMI
+    let fd = document.forms.Form4584;
+    // Манипулятор API растровой графики
+    let ctx = document.getElementById("PCBImg").getContext("2d");
+    // Таблица функций для ножек мК (загружается из внедрённого csv-файла)
+    let db = null;
+    // Таблица функций закреплённая пользователем за ножками мК
+    let us = null;
+    let ixTargetPin  = 0 | -1;  // Индекс вывода корпуса
+    let ixTargetPinZ = 0 | -1;  // Регистра задержки для индекса вывода
+    // Динамический фильтр отбора записей (dinamic record selection filter)
+    let dRSF = null;            // getFilter(0, "noneMatch"); //
+    // Статический  фильтр отбора записей (static  record selection filter)
+    const sRSF = {
+        searchString: "",   // ключевое слово для выборки группы функций по корню
+        col: 0 | -1,        // индекс колонки для выборки группы функций по корню
+        masks:              // набор субмасок (суффиксов) для поиска в имени функции
+            ";;;;;;;;;;;;;;;",  // 16 субмасок поиска, !IE11 ";".repeat(15)
+        emptyMasks:             // 16 пустых субмасок для сброса фильтра
+            ";;;;;;;;;;;;;;;",  // на 16 ячеек, !IE11 ";".repeat(15)
+        isSubMaskEn:            // флаги активации субмасок поиска
+        [
+            false, false, false, false, false, false, false, false,
+            false, false, false, false, false, false, false, false
+        ],                  // !IE11 new Array(16).fill(false)
+        ixSM: 0 | -1        // индекс текущей субмаски (под указателем мыши)
+    };
+    sRSF.masks = sRSF.masks.split(";");
+    sRSF.emptyMasks = sRSF.emptyMasks.split(";");
+
+    // Выдает параметры для фильтра отбора записей
+    //  searchString    - ключевое слово для выборки группы функций по корню
+    //  col             - индекс колонки для выборки группы функций по корню
+    //  masks           - набор субмасок (суффиксов) для поиска в имени функции
+    let getFilter = (function() {
+        let stencil = [
+            // Первые 3 колонки базы данных содержат: позиционный код монтажной площадки
+            // корпуса BGA144, её номер и тип вывода (IO). По ним поиск не выполняется.
+            // Используем ячейку[0] для определения "блокирующего" фильтра (для инициализации dRSF)
+            { searchString: "noneMatch", col: 0 | -1, masks: ";;;;;;;;;;;;;;;" },
+            { searchString: "noneMatch", col: 0 | -1, masks: ";;;;;;;;;;;;;;;" }, // undefined, //
+            { searchString: "noneMatch", col: 0 | -1, masks: ";;;;;;;;;;;;;;;" }, // undefined, //
+            { searchString: "Fixed",    col: 0x0, masks: "ADC;CH;AGND;DGND;GND;AVDD;DVDD;VDDPST;VDD;USB;BAT;OSC;RST;VCC;;" },
+            { searchString: "P",        col: 0x1, masks: "PA;PB;PC;PD;PE;PF;PG;PH;0;1;2;3;4;5;6;7" },
+            { searchString: "MEM",      col: 0x2, masks: "ADDR;DATA;0;1;2;3;4;5;6;7;8;9;11;;;" },
+            { searchString: "MEM",      col: 0x3, masks: "CE;OE;WE;LB;UB;0;1;;;;;;;;;" },
+            { searchString: "UART",     col: 0x4, masks: "UART0;UART1;UART2;UART3;RX;TX;CTS;DCD;DSR;DTR;RI;RTS;;;;" },
+            { searchString: "CAN",      col: 0x5, masks: "CAN0;CAN1;RX;TX;;;;;;;;;;;;" },
+            { searchString: "IIC",      col: 0x6, masks: "IIC0;IIC1;SCL;SDA;;;;;;;;;;;;" }, // "I2C"
+            { searchString: "SPI",      col: 0x7, masks: "SPI0;SPI1;SPI2;SPI3;CLK;FSS;RXD;TXD;;;;;;;;" },
+            { searchString: "MII",      col: 0x8, masks: "COL;CRS;MDC;MDIO;RX_DV;TX_EN;RXD;TXD;0;1;2;3;CLK;ER;RX;TX" },
+            { searchString: "CMP",      col: 0x9, masks: "CMP0;CMP1;CMP2;OUT;IN;DACSUP;;;;;;;;;;" },
+            { searchString: "TIM",      col: 0xA, masks: "TIM0_IN;TIM1_IN;TIM2_IN;;;;;;;;;;;;;" },
+            { searchString: "CAP",      col: 0xB, masks: "CAP0;CAP1;CAP2;CAP3;CAP4;CAP5;;;;;;;;;;" }, // "ECAP"
+            { searchString: "QEP",      col: 0xC, masks: "QEP0;QEP1;A;B;I;S;;;;;;;;;;" }, // "QEP"
+            { searchString: "EPWM",     col: 0xD, masks: "SYNCI;EPWM0;EPWM1;EPWM2;EPWM3;EPWM4;EPWM5;EPWM6;EPWM7;EPWM8;A;B;;TZ;;" },
+            { searchString: "JT",       col: 0xE, masks: ";;;;;;;;;;;;;;;" }, // "JTAG"
+            { searchString: "",         col: 0xF, masks: "JT;NMI;USB;PLL;;;;;;;;;;;;" } // "SPECIAL-MISC"
+            // Имена PWMx_ и CAPx_PWM создавали конфликт пересечения групп (а маски P PWM PLL - конфликт включения драйверов)
+        ];
+        stencil.forEach(function (o, ix) {
+            o.masks = o.masks.split(";");
+            o.col = ix;
+        });
+        stencil[0].col = 0 | -1;
+        return function (id) {
+            // Колонки индексируются в более чем 21-ричной системе счисления
+            return stencil[parseInt(id[1], RADIX21)];
+        };
+    }());
+
+    // Составляет и возвращает таблицу функций для ножек мК, exportObj.db
+    function bildDB(db, csvText) {
+        csvText = csvText.trim();
+        // Заменим имена функций в csv-файле, с данными из спецификации, на более
+        // удобные и для человека и для алгоритмов автоматической обработки (фильтрации)
+        // Можно оптимизировать, заменив кое-где RegExp на String,
+        // но тогда надо написать полифил replaceAll для IE11
+        csvText = csvText.replace(/CAN_(RX|TX)(\d)/g, "CAN$2_$1");
+        csvText = csvText.replace(/CAP_PWM(\d)/g, "CAP$1_PWM");
+        csvText = csvText.replace(/CH(\d+)_ADC(\d+)/g, "ADC$2_CH$1");
+        csvText = csvText.replace(/CMP_OUT(\d)/g, "CMP$1_OUT");
+        csvText = csvText.replace(/IIC_(SCL|SDA)(\d)/g, "IIC$2_$1");
+        csvText = csvText.replace(/JTAG_T/g, "JT");
+        csvText = csvText.replace(/PWM_(A|B)(\d)/g, "EPWM$2_$1");
+        csvText = csvText.replace(/PWM_TZ(\d)/g, "EPWMx_TZ$1");
+        csvText = csvText.replace(/PWM_SYNCI/g, "EPWM0_SYNCI");
+        csvText = csvText.replace(/;QEP_(\w)(\d);/g, ";QEP$2_$1;");
+        csvText = csvText.replace(/;QEP_(A|B)\/X(\w+)(\d);/g, ";QEP$3_$1/X$2;");
+        csvText = csvText.replace(/SPI_(\w{3})(\d)/g, "SPI$2_$1");
+        csvText = csvText.replace(/TIMER_IN(\d)/g, "TIM$1_IN");
+        csvText = csvText.replace(/UART_(\w{2,3})(\d)/g, "UART$2_$1");
+        // Выполним разбиение csv-файла на строки
+        let dbText = csvText.split("\n");
+        // Составим упорядоченную БД о выводах корпуса (таблицу функций для ножек мК, db)
+        let numbPin = 0 | 0; // Текущий номер вывода корпуса
+        dbText.forEach(function (recPad) {
+            recPad = recPad.trim();
+            let ixSemicolon = recPad.indexOf(";");
+            // Если ixSemicolon === 0 ? "дополняющая запись о функции ножки"
+            if (ixSemicolon !== 0) {
+                // Строка начинается с цифры - создадим запись о выводе
+                numbPin = 0 | recPad.substring(0, ixSemicolon);
+                // Ловим дублирующиеся записи о выводах корпуса
+                if (db[numbPin - 1] !== null) { debugger; }
+                // Создаём запись о ножке
+                db[numbPin - 1] = [];
+            }
+            // Внесём запись в таблицу функций для ножек мК, db
+            db[numbPin - 1].push(recPad.substring(ixSemicolon + 1).split(";"));
+        });
+        // Памятка. По пустым ячейкам (undefined) forEach не ходит
+        // Внесем заглушки в пустые записи БД о выводах корпуса
+        db.forEach(function (recPad, ix) {
+            if (recPad === null) {
+                db[ix] = String("NC;Z;Неиспользуемый вывод корпуса").split(";"); debugger;
+            }
+        });
+        console.clear();
+        console.log(
+            document.getElementById("bd-K1921VK01T").dataset.column.trim() + "\n" +
+            dbText.join("\n")
+        );
+        // Можно поставить точку остановки и скопировать содержимое консоли в Excel
+        console.clear();
+        return db;
+    }
+    // Инициируем массивы под таблицу функций и выбор пользователя
+    db = new Array(208);
+    us = new Array(db.length);
+    // !IE11 new Array(db.length).fill({ func: -1 })
+    for (us[0] = 1; us[0] < us.length; us[0] += 1) {
+        us[us[0]] = { func: -1, type: -1, resistor: -1, funcName: "", port: "" };
+        db[us[0]] = null;
+    }
+    us[0] = { func: -1, type: -1, resistor: -1, funcName: "", port: "" };
+    db[0] = null;
+    // Загрузим внедрённый csv-файл (см. ниже по тексту тег script)
+    // Составим таблицу функций, db, для ножек мК из внедрённого csv файла
+    db = bildDB(db, document.getElementById("bd-K1921VK01T").textContent);
+
+    // Набор функций для фиксации выбора пользователя в us[ixTargetPin]
+    let update = (function () {
+        // Поля экспортируемого объекта
+        let exportObj = { pinFunc: null, pinType: null, pinPullUp: null };
+        // Создает событие пользователя и передаёт данные модулю кодогенератора
+        function codeGen() {
+            // Пошлём событие программе генерации листинга Си-кода
+            const evt = document.createEvent("CustomEvent");
+            const params = { bubbles: false, cancelable: false, detail: us };
+            evt.initCustomEvent("codeGen", params.bubbles, params.cancelable, params.detail);
+            document.body.dispatchEvent(evt);
+        }
+        // Фиксирует выбор пользователя для резистора подтяжки. Выбор всегда валиден?
+        exportObj.pinPullUp = function () {
+            us[ixTargetPin].resistor = (
+                us[ixTargetPin].resistor === 0 ? 1 : // 1 == R к Ucc
+                us[ixTargetPin].resistor === 1 ? -1 : 0 // Infinity / 0 == R к GND
+            );
+            codeGen();
+        };
+        // Фиксирует выбор пользователя для типа ножки. Проверяет валидность выбора
+        exportObj.pinType = function (isInc) {
+            // Аргумент isInc определяет должна ли функция поменять тип вывода
+            // согласно перечню возможных вариантов для функции ножки.
+            // Ножка с фиксированной функцией: GND, Ucc, nRST и прочее
+            if (us[ixTargetPin].func === -1) { return; }
+            // Уточним имя функции
+            let funcName = us[ixTargetPin].funcName;
+            // Проверим, можно ли однозначно уточнить тип вывода
+            // icoIx == [PWR,1:AIO,2:AI,3:AO,4:I,  5:O,6:OD,7:OS]
+            // TODO: Оптимизировать имена функций
+            // TODO: По результатам работы этого фильтра можно уточнить подсказки
+            // TODO: согласовать icoIx с исходными в csv-файле [PWR,IO,,AO,I,O]+"AIO" ? 1
+            let type = 0 | (
+                // 5:O Выходов меньше, идентифицируем их
+                (funcName.indexOf("CMP") === 0 && funcName.indexOf("OUT") !== -1) ? 5 :
+                (funcName.indexOf("EPWM") === 0 && funcName.indexOf("A") !== -1) ? 5 :
+                (funcName.indexOf("EPWM") === 0 && funcName.indexOf("B") !== -1) ? 5 :
+                funcName.indexOf("EXTRST") === 0 ? 5 :
+                funcName.indexOf("JTDO/SWO") === 0 ? 5 :
+                funcName.indexOf("MEM_ADDR") === 0 ? 5 :
+                funcName.indexOf("MEM_CE") === 0 ? 5 :
+                funcName.indexOf("MEM_LB") === 0 ? 5 :
+                funcName.indexOf("MEM_OE") === 0 ? 5 :
+                funcName.indexOf("MEM_UB") === 0 ? 5 :
+                funcName.indexOf("MEM_WE") === 0 ? 5 :
+                funcName.indexOf("MII_MDC") === 0 ? 5 :
+                funcName.indexOf("PLL_DIV2") === 0 ? 5 :
+                (funcName.indexOf("UART") === 0 && funcName.indexOf("DTR") !== -1) ? 5 :
+                (funcName.indexOf("UART") === 0 && funcName.indexOf("RTS") !== -1) ? 5 :
+                funcName.indexOf("USB_DRVVBUS") === 0 ? 5 :
+                funcName.indexOf("VRES") === 0 ? 5 :
+                // 4:I Входов больше, а маска меньше, т.к. выходы нашли
+                funcName.indexOf("CLK_USB") === 0 ? 4 : // ???
+                funcName.indexOf("CMP_DACSUP") === 0 ? 4 :
+                (funcName.indexOf("CMP") === 0 && funcName.indexOf("IN") !== -1) ? 4 :
+                funcName.indexOf("CPE") === 0 ? 4 :
+                funcName.indexOf("EPWM0_SYNCI") === 0 ? 4 :
+                funcName.indexOf("EPWMx_TZ") === 0 ? 4 :
+                funcName.indexOf("JT") === 0 ? 4 :
+                funcName.indexOf("MII_COL") === 0 ? 4 :
+                funcName.indexOf("MII_CRS") === 0 ? 4 :
+                funcName.indexOf("MII_TXCLK") === 0 ? 4 : // ???
+                funcName.indexOf("NMI") === 0 ? 4 :
+                funcName.indexOf("nRST") === 0 ? 4 :
+                funcName.indexOf("QEP") === 0 ? 4 :
+                funcName.indexOf("FS") === 0 ? 4 : // SPI_FSS
+                (funcName.indexOf("TIM") === 0 && funcName.indexOf("IN") !== -1) ? 4 :
+                // I2C может быть и ведущим в ведомым (только открытй сток)
+                //(funcName.indexOf("IIC") === 0 && funcName.indexOf("SCL") !== -1) ? 4 :
+                (funcName.indexOf("IIC") === 0 && funcName.indexOf("SDA") !== -1) ? 6 :
+                // OSC
+                funcName.indexOf("XO") !== -1 ? 5 :
+                funcName.indexOf("XI") !== -1 ? 4 :
+                // CANx MII SPIx UARTx (не поднимать выше)
+                funcName.indexOf("TX") !== -1 ? 5 :
+                funcName.indexOf("RX") !== -1 ? 4 :
+                funcName.indexOf("UART") === 0 ? 4 :
+                // Ножки без функции с заданным номером
+                funcName.indexOf("–") === 0 ? 1 :
+                funcName.length === 0 ? 1 : // TODO: разделить коды AIO и IO и default (none)
+                99 // Тип должен уточнить пользователь
+            );
+            if (type <= 4 || type === 6) {
+                // Назначенная ножке функция однозначно определила тип вывода
+                us[ixTargetPin].type = type;
+            } else if (type === 5) {
+                // Цифровой выход. Уточним какой 5:O,6:OD,7:OS
+                us[ixTargetPin].type = 0 | (
+                    !isInc ? type :
+                    us[ixTargetPin].type === 5 ? 6 :
+                    us[ixTargetPin].type === 6 ? 7 : 5
+                );
+            }
+            if (type !== 99) {
+                // Вызываем кодо-генератор, если функция поменяла тип вывода
+                if (isInc) { codeGen(); }
+                return;
+            }
+            // Выводы, чей тип (IO) может поменять пользователь
+            // Можно не уточнять type
+            type = 0 | (
+                // 5:O === IO без временного разделения ("Ведущий/Ведомый")
+                // TODO: (funcName.indexOf("IIC") === 0 && funcName.indexOf("SCL") !== -1) ? 4 : или 6
+                //funcName.indexOf("SPI_CLK") === 0 ? 5 :
+                //funcName.indexOf("CAP_PWM") === 0 ? 5 :
+                //funcName.indexOf("MII_MDIO") === 0 ? 5 :
+                // 5:O === IO с временным разделением ("ШинаДанных")
+                funcName.indexOf("MEM_DATA") === 0 ? 5 :
+                99 // == undefined Остались только GPIO
+            );
+            // Перебор типа вывода для функции GPIO (type === 99) или
+            // для db[ixTargetPin][us[ixTargetPin].func][1] === "IO"
+            // GPIO 4:I,5:O,6:OD,7:OS
+            type = us[ixTargetPin].type;
+            type = (type === -1 ? 4 : type);
+            us[ixTargetPin].type = 0 | (
+                !isInc ? type :
+                us[ixTargetPin].type === 4 ? 5 :
+                us[ixTargetPin].type === 5 ? 6 :
+                us[ixTargetPin].type === 6 ? 7 : 4
+            );
+            // Вызываем кодо-генератор, если функция поменяла тип вывода
+            if (isInc) { codeGen(); }
+        };
+        // Фиксирует выбор пользователя для функции. Когда возможно уточняет тип вывода
+        exportObj.pinFunc = function (funcIx) {
+            // Ножка с фиксированной функцией: GND, Ucc, nRST и прочее
+            if (db[ixTargetPin].length === 1) { return -1; }
+            funcIx = (db[ixTargetPin].length > funcIx ? funcIx : us[ixTargetPin].func);
+            us[ixTargetPin].type = -1;
+            us[ixTargetPin].resistor = -1;
+            us[ixTargetPin].func = funcIx;
+            us[ixTargetPin].funcName = "";
+            us[ixTargetPin].port = "";
+            // Уточним имя функции
+            if (funcIx !== -1) {
+                us[ixTargetPin].funcName = db[ixTargetPin][funcIx][0];
+                us[ixTargetPin].port = db[ixTargetPin][0][0];
+                update.pinType(false);
+            } // isInc
+            codeGen();
+            return funcIx;
+        };
+        return exportObj;
+    }());
+
+    // Рисует мК MDR1201GI в корпусе BGA144 с учётом настройки фильтра выбора ножек
+    function drawBGA144() {
+        const M_2PI = 2.0 * Math.PI;
+        const M_PI2 = 0.5 * Math.PI;
+        let i = 0 | 0; // Индекс контакта в строке 0..11
+        let j = 0 | 0; // Индекс строчки контактов 0..11
+
+        // На печатную плату и на микросхему мы смотрим сверху
+
+        // Рисует рамку и корпус микросхемы
+        function dwPCB() {
+            ctx.beginPath();
+            ctx.moveTo(-20, -10);
+            ctx.lineTo(-20, 320);
+            ctx.lineTo(320, 320);
+            ctx.lineTo(320, -20);
+            ctx.lineTo(-10, -20);
+            ctx.closePath();
+            ctx.fillStyle = "khaki"; // "#98FF89"; //
+            ctx.fill();
+            ctx.strokeStyle = "black";
+            ctx.stroke();
+        }
+        // Возвращает цвет ножки в соответствии с фильтром поиска
+        function getPinColor(ixPin) {
+            // if (ixPin === 0) { console.info(dRSF !== sRSF ? "Динамический dRSF" : "Статический sRSF"); }
+            // О ножке нет записи в БД
+            if (db[ixPin] === undefined) { return "whitesmoke"; }
+            // Для ножки пользователь выбрал функцию
+            if (us[ixPin].func !== -1) { return "palegreen"; }
+            // Ножка с фиксированной функцией: GND, Ucc, nRST и прочее
+            if (db[ixPin].length === 1 && (dRSF === null || dRSF.col === -1 || dRSF.searchString !== "Fixed")) {
+                return "whitesmoke";
+            }
+            // Фильтр деактивирован (dinamic Record Selection Filter)
+            if (dRSF === null || dRSF.col === -1) { return "lightgray"; }
+            let funcName = null;
+            let mask = null;
+            let isStaticNotFind = true;
+            let isFind = false;
+            // Активирован фильтр для ножек с фиксированной функцией ("Fixed")
+            if (db[ixPin].length === 1) {
+                // Выборка функции (EPWM1_A) из списка доступных для ножки
+                funcName = db[ixPin][0][0];
+                // Если субкритерий отбора отсутствует - зажигаем
+                if (dRSF.isSubMaskEn === undefined) { return "red"; }
+                // Уточним субмаски поиска (xA и xB и 1 и 2)
+                mask = dRSF.masks;
+                // Отсев результатов по статическим субмаскам EPWM[1]_[A]
+                isStaticNotFind = true; // не найдем - зажжём всё
+                dRSF.isSubMaskEn.forEach(function (isEnable, ix) {
+                    isStaticNotFind = isStaticNotFind &&
+                        !(isEnable && funcName.indexOf(mask[ix]) === -1);
+                });
+                // И, наконец, поиск совпадения по текущей субмаске
+                isFind = ((
+                    dRSF.ixSM === -1 ||
+                    mask.length <= dRSF.ixSM ||
+                    mask[dRSF.ixSM].length === 0
+                ) ? true : (funcName.indexOf(mask[dRSF.ixSM]) !== -1));
+                if (isStaticNotFind && isFind) { return "red"; }
+                return "whitesmoke";
+            }
+            // Активирован фильтр для ножек с несколькими функциями
+            let retValue = "lightgray"; // (db[ixPin].length === 1 ? "whitesmoke" : "lightgray"); //
+            let ixFunc = 0 | (dRSF.searchString === "P" ? 0 : 1);
+            while (ixFunc < (dRSF.searchString === "P" ? 1 : 5)) {
+                // Выборка функции (EPWM1_A) из списка доступных для ножки
+                funcName = (db[ixPin].length > ixFunc ?
+                    db[ixPin][ixFunc][0] : "");
+                // Поиск совпадения по первой части фильтра (EPWM)
+                if (funcName.length !== 0 && funcName !== "–" &&
+                    funcName.indexOf(dRSF.searchString) === 0)
+                {
+                    // Если субкритерий отбора отсутствует - зажигаем
+                    if (dRSF.isSubMaskEn === undefined) { return "red"; }
+                    // Уточним субмаски поиска (xA и xB и 1 и 2)
+                    mask = dRSF.masks;
+                    // Отсев результатов по статическим субмаскам EPWM[1]_[A]
+                    isStaticNotFind = true; // не найдем - зажжём всё
+                    dRSF.isSubMaskEn.forEach(function (isEnable, ix) {
+                        isStaticNotFind = isStaticNotFind &&
+                            !(isEnable && funcName.indexOf(mask[ix]) === -1);
+                    });
+                    // И, наконец, поиск совпадения по текущей субмаске
+                    isFind = ((
+                        dRSF.ixSM === -1 ||
+                        mask.length <= dRSF.ixSM ||
+                        mask[dRSF.ixSM].length === 0
+                    ) ? true : (funcName.indexOf(mask[dRSF.ixSM]) !== -1));
+                    if (isStaticNotFind && isFind) { return "red"; }
+                }
+                ixFunc += 1;
+            }
+            return retValue;
+        }
+        // Рисует ножку микросхемы
+        function dwPin(ixPin, icoIx, x, y, isRedrawCursor) {
+            // Тип ножки по умолчанию (поле [1] в db)
+            let type = db[ixPin][(us[ixPin].func === -1 ? 0 : us[ixPin].func)][1];
+            // Уточним иконку типа ножки (вход / выход)
+            icoIx = (us[ixPin].type !== -1 ?
+                // Тип ножки уточнил пользователь
+                us[ixPin].type :
+                // Тип ножки по умолчанию
+                (
+                    // TODO: Для отладки закомментировать === "IO"
+                    type === "IO" ? 1 :
+                    type === "PWR" ? 0 :
+                    type === "O" ? 5 :
+                    type === "I" ? 4 :
+                    type === "IOZ" ? 1 :
+                    type === "AI" ? 2 :
+                    type === "AO" ? 3 :
+                    type === "AIO" ? 1 : // Хм USB DM/DP
+                    (0 | Math.random() * (7 - (Number.EPSILON || 2.220446049250313e-16)))
+                )
+            );
+            // Рисуем квадратик резистора подтяжки потенциала к +VCC или к GND
+            // Флаг isRedrawCursor поднимает код отрисовки ножки-курсора
+            if (!isRedrawCursor && us[ixPin].resistor !== -1) {
+                ctx.beginPath();
+                ctx.fillStyle = (us[ixPin].resistor === 0 ? "powderblue" : "lightpink"); // lightskyblue
+                ctx.rect(x - 9, y - 9, 18, 18);
+                ctx.fill();
+            }
+            // Рисуем иконку ножки
+            ctx.beginPath();
+            if (icoIx === 0) {
+                // PWR
+                ctx.moveTo(x + 6, y - 6);
+                ctx.lineTo(x - 6, y - 6);
+                ctx.lineTo(x - 6, y + 6);
+                ctx.lineTo(x + 6, y + 6);
+                ctx.closePath();
+            } else if (icoIx === 1) {
+                // Аналоговый вход / выход
+                ctx.arc(x, y, 6, 0, M_2PI);
+            } else if (icoIx === 2) {
+                // Аналоговый вход
+                ctx.moveTo(x + 6, y - 6);
+                ctx.lineTo(x - 1, y - 6);
+                ctx.lineTo(x - 7, y + 0);
+                ctx.lineTo(x - 1, y + 6);
+                ctx.lineTo(x + 6, y + 6);
+                ctx.closePath();
+            } else if (icoIx === 3) {
+                // Аналоговый выход
+                ctx.moveTo(x - 6, y - 6);
+                ctx.lineTo(x - 6, y + 6);
+                ctx.lineTo(x + 1, y + 6);
+                ctx.lineTo(x + 7, y + 0);
+                ctx.lineTo(x + 1, y - 6);
+                ctx.closePath();
+            } else if (icoIx === 4) {
+                // Цифровой Вход
+                ctx.arc(x, y, 6, -M_PI2, M_PI2);
+                ctx.lineTo(x - 5, y + 6);
+                ctx.lineTo(x - 5, y - 6);
+                ctx.closePath();
+            } else if (icoIx === 5) {
+                // Цифровой двухтактный выход
+                ctx.moveTo(x - 7, y + 0);
+                ctx.lineTo(x + 0, y + 7);
+                ctx.lineTo(x + 7, y + 0);
+                ctx.lineTo(x + 0, y - 7);
+                ctx.closePath();
+            } else if (icoIx === 6) {
+                // Выход с открытым коллектором (стоком)
+                ctx.moveTo(x + 0, y - 7);
+                ctx.lineTo(x - 7, y + 0);
+                ctx.lineTo(x + 0, y + 7);
+                ctx.lineTo(x + 7, y + 0);
+                ctx.lineTo(x + 0, y - 7);
+                ctx.lineTo(x + 0, y - 8);
+                ctx.lineTo(x - 8, y - 8);
+                ctx.lineTo(x + 8, y - 8);
+            } else if (icoIx === 7) {
+                // Выход с открытым эмиттером (истоком)
+                ctx.moveTo(x + 0, y + 7);
+                ctx.lineTo(x + 7, y + 0);
+                ctx.lineTo(x + 0, y - 7);
+                ctx.lineTo(x - 7, y + 0);
+                ctx.lineTo(x + 0, y + 7);
+                ctx.lineTo(x + 0, y + 8);
+                ctx.lineTo(x - 8, y + 8);
+                ctx.lineTo(x + 8, y + 8);
+            }
+            ctx.fillStyle = getPinColor(ixPin);
+            ctx.fill();
+            ctx.stroke();
+        }
+
+        // Сбрасываем аффинную матрицу для очистки рисунка
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+
+        // Смещаем начало координат поближе к нижнему правому углу
+        ctx.setTransform(1, 0, 0, -1, 70, ctx.canvas.height - 70);
+        ctx.lineWidth = 1.6;        // Толщина пера для рисования
+        dwPCB();                    // Нарисовали мК (вид сверху)
+
+        // Рисуем ножки микросхемы
+        j = 0 | 0; // строчки контактов 0..15
+        while (j < 16) {
+            i = 0 | 0; // контакты в строке 0..12
+            while (i < 13) {
+                // dwPin(ixPin, icoIx, x, y, isRedrawCursor)
+                dwPin(13 * j + i, 1, 20 * (i + j % 4), 20 * j, false);
+                i += 1;
+            }
+            j += 1;
+        }
+        ctx.lineWidth = 4.5;
+        j = 0 | 0; // строчки контактов 0..15
+        while (j < 4) {
+            // Переместим систему координат к центру рисунка, отразим Y, повернём, сместим
+            ctx.setTransform(1, 0, 0, -1, ctx.canvas.width / 2, ctx.canvas.height / 2);
+            ctx.rotate(j * M_PI2);
+            ctx.translate(-180 + 1.5, -180 - 5);
+            i = 0 | 0; // контакты в строке 0..12
+            while (i < 52) {
+                let ixPin = 52 * j + i;
+                ctx.beginPath();
+                ctx.strokeStyle = (ixTargetPin === ixPin ? "yellow" : getPinColor(ixPin));
+                ctx.moveTo(7 * i, (ixTargetPin === ixPin ? 10 : 0));
+                ctx.lineTo(7 * i, -25);
+                ctx.stroke();
+                if (us[ixPin].resistor !== -1) {
+                    ctx.beginPath();
+                    ctx.strokeStyle = (us[ixPin].resistor === 0 ? "blue" : "red");
+                    ctx.moveTo(7 * i, 0);
+                    ctx.lineTo(7 * i, -8);
+                    ctx.stroke();
+                }
+
+                i += 1;
+            }
+            j += 1;
+        }
+
+        if (ixTargetPin === -1) { return; }
+
+        // Рисуем курсор (ixTargetPin == 0..207)
+        ctx.setTransform(1, 0, 0, -1, 70, ctx.canvas.height - 70);
+        ctx.strokeStyle = "black";
+        ctx.lineWidth = 1.6;
+        j = 0 | (ixTargetPin / 13); // строчки контактов 0..15
+        i = 0 | (ixTargetPin % 13); // контакты в строке 0..12
+        i = i + j % 4;
+        ctx.beginPath();
+        ctx.arc(20 * i, 20 * j, 11, 0, M_2PI);
+        // Вырезаем ножку
+        //ctx.globalCompositeOperation = "destination-out";
+        ctx.fillStyle = "white";
+        ctx.fill();
+        //ctx.globalCompositeOperation = "source-over";
+        // Рисуем обводку для индикации подтяжки потенциала
+        if (db[ixTargetPin] !== undefined && us[ixTargetPin].resistor !== -1) {
+            ctx.strokeStyle = (us[ixTargetPin].resistor === 0 ? "blue" : "red");
+            ctx.stroke();
+        }
+        // dwPin(ixPin, icoIx, x, y, isRedrawCursor)
+        dwPin(ixTargetPin, 1, 20 * i, 20 * j, true);
+
+    }
+    // Рисуем микросхему
+    drawBGA144();
+
+    // Сканер атрибутов ножек микроконтроллера
+    ctx.canvas.onmousemove = function(evt) {
+        // Инверсная аффинная матрица для сканирования ножек на виде сверху
+        const iMatrix = [
+            1, 0, -70, //ctx.canvas.width
+            0, -1, -70 + ctx.canvas.height
+        ];
+        let x = iMatrix[0] * evt.offsetX + iMatrix[1] * evt.offsetY + iMatrix[2];
+        let y = iMatrix[3] * evt.offsetX + iMatrix[4] * evt.offsetY + iMatrix[5];
+        // console.log(evt.offsetY + " : " + y); return;
+        // Первая ножка в координатах 0, 0. Далее по сетке с приращением 20px
+        let i = 0 | Math.round(x / 20); // контакты в строке 0..15 (ABCDEFGHJKLM)
+        let j = 0 | Math.round(y / 20); // строчки контактов 0..15 (1..12)
+        j = (j < 0 ? -1 : j > 15 ? -1 : j);
+        i = (j < 0 ? -1 : (i - (j % 4)));
+        i = (i < 0 ? -1 : i > 12 ? -1 : i);
+
+        // Индекс вывода корпуса QFP208 0..207
+        ixTargetPin = ((j < 0 || i < 0) ? -1 : (13 * j + i)); // 0..13x15+13-1==208-1
+
+        // Рисуем микросхему, если указатель сместился к следующей ножке
+        if (ixTargetPinZ !== ixTargetPin) {
+            ixTargetPinZ = ixTargetPin;
+            drawBGA144();
+        }
+        // Распечатаем позиционный код монтажной площадки и номер
+        fd.PiNN.value = (ixTargetPin === -1 ? "" : (ixTargetPin + 1));
+        // Печатаем пояснительный текст для ножки мК
+        document.getElementById("PiNL").textContent = (ixTargetPin === -1 ? " " : db[ixTargetPin][0][2]);
+        // Распечатаем на кнопках имена функций ножки мК
+        let tagRadioInput = null;
+        let ix = 0 | 0;
+        for (ix = 0 | 0; ix < 5; ix += 1) {
+            tagRadioInput = fd["Pin" + (ix).toString(RADIX21).toUpperCase()];
+            // Печатаем на тегах label имена функций
+            tagRadioInput.nextElementSibling.textContent = (
+                (
+                    ixTargetPin !== -1 &&
+                    db[ixTargetPin].length > ix &&
+                    db[ixTargetPin][ix][0].length !== 0
+                ) ? db[ixTargetPin][ix][0] : " "
+            );
+            // Подключим к тегам input их метки
+            tagRadioInput.nextElementSibling.setAttribute("for", tagRadioInput.id);
+        }
+        // Установим отметку о выборе пользователя ..
+        tagRadioInput = (
+            (ixTargetPin === -1 || us[ixTargetPin].func === -1) ? fd.PFuncUNSELECT :
+            fd["Pin" + (us[ixTargetPin].func).toString(RADIX21).toUpperCase()]
+        ); // либо на скрытый элемент "radio"-input, либо на выбранный ранее
+        tagRadioInput.checked = true;
+        tagLabelPFuncZ = tagRadioInput.nextElementSibling;
+        tagLabelPFuncZ.setAttribute("for", "PFuncUNSELECT");
+    };
+    ctx.canvas.onmouseout = function () {
+        ixTargetPin = -1;
+        drawBGA144();
+        // Распечатаем позиционный код монтажной площадки и номер
+        fd.PiNN.value = "";
+        // Печатаем пояснительный текст для ножки мК
+        document.getElementById("PiNL").textContent = " ";
+        // Удалим с кнопок имена функций ножки мК
+        let tagRadioInput = null;
+        let ix = 0 | 0;
+        for (ix = 0 | 0; ix < 5; ix += 1) {
+            tagRadioInput = fd["Pin" + (ix).toString(RADIX21).toUpperCase()];
+            // Удаляем текст на тегах label
+            tagRadioInput.nextElementSibling.textContent = " ";
+            // Отключим от тегов input их метки
+            tagRadioInput.nextElementSibling.setAttribute("for", "PFuncUNSELECT");
+        }
+        // Установим отметку о выборе на скрытый элемент "radio"-input
+        fd.PFuncUNSELECT.checked = true;
+        // TODO Подумать, сократить
+        tagLabelPFuncZ = fd.PFuncUNSELECT.nextElementSibling;
+        // document.querySelectorAll("#preForm>input[id^='Pin']")
+        // for..of и forEach !IE?, ? for..in c [ix]
+    };
+    let isPinHold = false; // меняет только функция canvas.onclick
+    ctx.canvas.onclick = (function (f1, f2) {
+        // onclick без управляющих клавиш - Выбор функции для ножки
+        // shiftKey + onclick - Меняем тип вывода: I, O-PP, O-OD, O-OS, ...
+        //   altKey + onclick - Включаем подтяжку: R-Z, R-1, R-0
+        return function (evt) {
+            if (evt.metaKey || evt.altKey) { return true; }
+            if (evt.ctrlKey && !evt.shiftKey) { return true; }
+            //
+            if (evt.shiftKey && !isPinHold) {
+                if (!evt.ctrlKey) {
+                    // Переключаем тип вывода: I, O-PP, O-OD, O-OS, ...
+                    update.pinType(true); // isInc
+                } else {
+                    // Включаем / выключаем резистор подтяжки потенциала
+                    update.pinPullUp();
+                }
+                drawBGA144();
+            } else {
+                // Включаем / выключаем модальный режим Выбора функции для ножки
+                isPinHold = !isPinHold;
+                // Поднимем / опустим кнопки Выбора функции для ножки
+                evt.target.previousElementSibling.dataset.state =
+                    (isPinHold ? "SetFunc" : "SetFilter");
+                // В модальном режиме блокируем сканирование ножек мК
+                ctx.canvas.onmousemove = (isPinHold ? null : f1);
+                ctx.canvas.onmouseout = (isPinHold ? null : f2);
+                // Выход из модального режима по клику на canvas
+                if (!isPinHold && evt.isTrusted) {
+                    ctx.canvas.onmousemove(evt);
+                }
+            }
+            return false;
+        };
+    }(ctx.canvas.onmousemove, ctx.canvas.onmouseout));
+
+
+    // Распечатаем названия периферийных устройств микроконтроллера
+    String("posPad;numbSi;Type;Fixed;PORT;A|D;A|D;UART;CAN;I2C;SPI;MII;CMP;TIM;CAP;QEP;EPWM;JTAG;MISC")
+        .split(";")
+        .forEach(
+            function (columnName, ix) {
+                let tagRadioInput = fd["F" + ix.toString(RADIX21).toUpperCase()];
+                if (tagRadioInput !== undefined) {
+                    tagRadioInput.nextElementSibling.textContent = columnName;
+                }
+            }
+        );
+
+    // Распечатывает субмаски для каскадного фильтра отбора записей
+    function printSubMask4Filter(subMask, isSubMaskEn) {
+        subMask.forEach(function(text, ix) {
+            let tagCheckboxInput = fd["A" + ix.toString(16).toUpperCase()];
+            tagCheckboxInput.nextElementSibling.textContent = (text.length === 0 ? " " : text);
+            tagCheckboxInput.checked = (isSubMaskEn === undefined ? false : isSubMaskEn[ix]);
+        });
+    }
+
+    // Сканер групп функций (Функции настройки фильтра)
+
+    fd.onmouseover = function (e) {
+        // Отработаем вход указателя в теги LABEL
+        if (e.target.tagName !== "LABEL") { return; }
+        // Деактивирует динамический фильтр
+        function doOnMouseOut (e) {
+            e.target.onmouseout = null;
+            // Распечатаем поля субмасок статического фильтра
+            printSubMask4Filter(
+                sRSF.masks,
+                sRSF.isSubMaskEn
+            );
+            // Сбросим индекс текущей субмаски
+            sRSF.ixSM = -1;
+            // Включаем статический фильтр
+            dRSF = sRSF;
+            drawBGA144();
+        }
+        e.stopPropagation();
+        if (e.target.previousElementSibling.type === "radio" &&
+            e.target.previousElementSibling.name === "PUnit") {
+            // Курсор над первой колонкой фильтра
+            // Включаем динамический фильтр
+            dRSF = getFilter(e.target.previousElementSibling.id);
+            printSubMask4Filter(dRSF.masks);
+        } else if (e.target.previousElementSibling.type === "checkbox") {
+            // Курсор над второй колонкой фильтра
+            // Включаем статический фильтр
+            dRSF = sRSF; // если мышь не проскочила, то уже включен на теге-подложке
+            // Уточним индекс текущей субмаски
+            sRSF.ixSM = parseInt(e.target.previousElementSibling.id[1], 16);
+        } else {
+            // Печатаем пояснительный текст для функции ножки мК
+            let ixL = (0 | e.target.previousElementSibling.id.substring(3));
+            document.getElementById("PiNL").textContent = (
+                (ixTargetPin === -1 || ixL >= db[ixTargetPin].length) ?
+                " " : db[ixTargetPin][ixL][2]
+            );
+            return; // Курсор над колонкой функций ножки
+        }
+        drawBGA144();
+        // Подключим обработчик на событие выхода указателя с тегов LABEL
+        e.target.onmouseout = doOnMouseOut;
+    };
+    // В данном приложении необходимо не только устанавливать,
+    // но и снимать отметку о выборе с элементов управления формы
+    // "radio"-input. Эта функциональность эмулируется с помощью
+    // дополнительного скрытого элемента input в каждом "radio"-наборе.
+    // Нужны так же регистры задержки для хранения исторического выбора
+    // пользователя tagLabelPUnitZ и tagLabelPFuncZ
+    let tagLabelPFuncZ = fd.PFuncUNSELECT.nextElementSibling;
+    fd.onchange = (function (tagLabelPUnitZ, tagLabelPFunczZ) {
+        return function (e) {
+            if (e.target.type === "radio" && e.target.name === "PUnit") {
+                tagLabelPUnitZ.setAttribute("for", tagLabelPUnitZ.previousElementSibling.id);
+                tagLabelPUnitZ = e.target.nextElementSibling;
+                tagLabelPUnitZ.setAttribute("for", "PUnitUNSELECT");
+                // Установим статический фильтр
+                if (e.target.id === "PUnitUNSELECT") {
+                    // Сбросим статический фильтр
+                    sRSF.masks = sRSF.emptyMasks;
+                    sRSF.col = -1;
+                } else {
+                    // Настроим фильтр для выборки записей
+                    sRSF.searchString = dRSF.searchString;
+                    sRSF.col = dRSF.col;
+                    sRSF.masks = dRSF.masks;
+                    sRSF.isSubMaskEn = [
+                        false, false, false, false, false, false, false, false,
+                        false, false, false, false, false, false, false, false
+                    ]; // 16 // .fill(false); // !IE11
+                }
+            } else if (e.target.type === "checkbox" && sRSF.isSubMaskEn !== undefined) {
+                // Уточним субмаску фильтра
+                sRSF.isSubMaskEn[parseInt(e.target.id[1], 16)] = e.target.checked;
+                drawBGA144();
+            } else if (e.target.type === "radio" && e.target.name === "PFunc") {
+                tagLabelPFuncZ.setAttribute("for", tagLabelPFuncZ.previousElementSibling.id);
+                tagLabelPFuncZ = e.target.nextElementSibling;
+                tagLabelPFuncZ.setAttribute("for", "PFuncUNSELECT");
+                // Выходим из модального режима Выбора функции для ножки
+                if (isPinHold) {
+                    ctx.canvas.onclick({
+                        target: e.target.parentElement.nextElementSibling
+                    }); // Эмулируем событие
+                }
+                // Фиксируем выбор пользователя
+                if (ixTargetPin !== -1) {
+                    update.pinFunc(
+                        e.target.id === "PFuncUNSELECT" ?
+                        -1 : parseInt(e.target.id[3], RADIX21));
+                    drawBGA144();
+                }
+            }
+        };
+    }(fd.PUnitUNSELECT.nextElementSibling, fd.PFuncUNSELECT.nextElementSibling));
+});
+</script>
+<script type="text/javascript">
+// Программа генерации листинга Си-кода
+/*jslint browser, devel, bitwise, long, unordered, white, this, for */
+!!document.addEventListener && document.addEventListener("DOMContentLoaded", function () {
+    "use strict";
+    String.prototype.toPRE = function (n) {
+        return ("    " + this).slice(-n);
+    };
+    // Алфавит позиционного кода монтажной площадки корпуса BGA144 (по оси X)
+  //const pinPosNameSet = "ABCDEFGHJKLM"; // пропущена цифра "I"
+  //const icoIx   = ["PWR", "AIO", "AI", "AO", "I", "O", "OD", "OS"];
+    const icoIx   = ["PWR", "AIO", "AI", "AO", "DI", "PP", "OD", "OS"];
+    const pullUP  = ["INF", "GND", "VDD"];
+    const tagFLog = document.getElementById("FuncLog").lastChild.firstChild;
+    const tagCLog = document.getElementById("CodeLog").lastChild.firstChild;
+    const tagInc  = document.getElementById("include");
+    const tagRCC  = document.getElementById("RCC");
+    const tagGPIO = document.getElementById("GPIO");
+    // Перечень строк include для подключения драйверов устройств
+    const txtINC = tagInc.textContent.trim().split("\n");
+    // Перечень строк кода включения тактирования устройств
+    const txtRCC = tagRCC.textContent.trim().split("\n");
+    // Перечень общих имён устройств ("UART")
+    const driver = tagInc.dataset.commonname.split(";");
+    // Перечень частных имён устройств ("UART1")
+    const device = tagRCC.dataset.punitname.split(";");
+    // Флаги подключения драйверов устройств
+    let isDrvOn = new Array(driver.length);
+    // Флаги включения тактирования устройств
+    let isDevOn = new Array(device.length);
+    // Отображаем теги с листинга файла main.c
+    tagInc.textContent = "";
+    tagRCC.textContent = "\n";
+    // Шаблон кода для настройки вывода мК
+    const templateGPIO = tagGPIO.lastChild.textContent;
+
+    tagFLog.onclick = function (e) {
+        let i = 0 | 0;
+        let tagsLI = e.target.childNodes;
+        let length = tagsLI.length;
+        let items = new Array(length);
+        for (i = 0 | 0; i < length; i += 1) {
+            items[i] = tagsLI[i];
+        }
+        items.sort(function (a, b) {
+            let funcName1 = a.textContent.substring(55);
+            let funcName2 = b.textContent.substring(55);
+            return (funcName1 > funcName2 ? 1 : -1);
+        });
+        e.target.textContent =
+            "Листинг 1. Распечатка конфигурируемых ножек           \n" +
+            "                                                        ";
+        for (i = 0 | 1; i < length; i += 1) {
+            e.target.appendChild(items[i]);
+        }
+        // "#ffffc0" : "palegreen"
+        return false;
+    };
+
+    document.body.addEventListener("codeGen", function(event) {
+        /* Формирует распечатку
+        Листинг 1. Распечатка конфигурируемых ножек
+        Pin:  99,  type:  DI,  PuPd: INF,  port:  PC7,  func: EPWM_TZ2
+        Pin: 115,  type:  PP,  PuPd: INF,  port:  PD4,  func: PD4
+        Pin: 124,  type:  OD,  PuPd: INF,  port: PD15,  func: PD15
+        */
+        tagFLog.textContent =
+            "Листинг 1. Распечатка конфигурируемых ножек (Ая)      \n" +
+            "                                                        ";
+        event.detail.forEach(function (pin, ix) {
+            if (pin.func === -1) {
+                return;
+            }
+            tagFLog.appendChild(document.createTextNode(
+                "\n" +
+                "Pin: " + String(ix + 1).toPRE(3) +
+                ",  type: " + String(icoIx[pin.type]).toPRE(3) +
+                ",  PuPd: " + pullUP[pin.resistor + 1] +
+                ",  port: " + String(pin.port.substring(0, 4)).toPRE(4) +
+                ",  func: " + pin.funcName
+            ));
+        });
+
+        /* Формирует распечатку файла main.c */
+
+        // Сбросим флаги подключения драйверов устройств
+        driver.forEach(function (ignore, ix) { isDrvOn[ix] = false; });
+        // Сбросим флаги включения тактирования устройств
+        device.forEach(function (ignore, ix) { isDevOn[ix] = false; });
+        // Сканируем имена назначенных функций для всех ножек мК
+        // Проверим имена функций и подключим драйвер устройства
+        event.detail.forEach(function (pin) {
+            // TODO: добавить поле "port" в массив us (в функции exportObj.pinFunc)?
+            let funcName = pin.funcName;
+            // Ищем в именах функций общие имена устройств ("UART")
+            let i = 0 | 0;
+            while (i < driver.length && funcName.indexOf(driver[i]) !== 0) {
+                i += 1;
+            }
+            // Поднимаем флаги подключения драйверов устройств
+            if (i < driver.length) { isDrvOn[i] = true; }
+            // Ищем в именах функций частные имена устройств ("UART1")
+            i = 0 | 0;
+            while (i < device.length && funcName.indexOf(device[i]) !== 0) {
+                i += 1;
+            }
+            // Поднимаем флаги включения тактирования устройств
+            if (i < device.length) { isDevOn[i] = true; }
+        });
+
+        isDrvOn[0] = true; // DWT
+        isDevOn[0] = true; // DWT
+        // Распечатываем строки Си-кода #include
+        tagInc.textContent = ""; // "\n"; //
+        isDrvOn.forEach(function (inOn, ix) {
+            if (inOn) { tagInc.textContent += txtINC[ix] + "\n"; }
+        });
+        // Распечатываем строки Си-кода в функции RCC_Configuration
+        tagRCC.textContent = "\n";
+        isDevOn.forEach(function (inOn, ix) {
+            if (inOn) { tagRCC.textContent += "    " + txtRCC[ix] + "\n"; }
+        });
+
+        // Очищаем листинг функции GPIO_Configuration
+        while (tagGPIO.firstChild.nextSibling) {
+            tagGPIO.removeChild(tagGPIO.lastChild);
+        }
+        // Печатаем новый код функции GPIO_Configuration
+        event.detail.forEach(function (pin) {
+            // { func: 4, type: 4, resistor: -1, funcName: 'UART2_TX', port: 'PC7' }
+            if (pin.func === -1) { return; }
+            let tagSpan = tagGPIO.appendChild(document.createElement("SPAN"));
+            // Заполняем и печатаем структуры PORT_InitTypeDef
+            /*  // #PNAME – #AFUNC ...
+                PORTInitStruct.PORT_Pin  = #INDEX;
+                PORTInitStruct.PORT_Mode = #TYPE;
+                PORTInitStruct.PORT_PuPd = #PUPD;
+                PORTInitStruct.PORT_AltF = #AFIX;
+                PORT_Init(#PORTx, &PORTInitStruct);*/
+            tagSpan.textContent = templateGPIO
+                .replace("#PNAME", pin.port)
+                .replace("#AFUNC", pin.funcName)
+                .replace("#INDEX", "PORT_Pin_" + pin.port.substring(2))
+                .replace("#TYPE", "PORT_Mode_" + icoIx[pin.type])
+                .replace("#PUPD", "PORT_PuPd_" + pullUP[pin.resistor + 1])
+                .replace("#AFIX", "PORT_AltF_" + (pin.func))
+                .replace("#PORTx", "PORT" + pin.port.substring(1, 2));
+        });
+
+        // Отображаем тег с листингом файла main.c
+        tagCLog.parentElement.parentElement.style.display = "block";
+    });
+});
+</script>
+<script id="bd-K1921VK01T" type="text/csv" data-column="numbPin;PFunc;Type;Prompt">
+23;PA0;IOZ;Вход/выход «порт A», разряд 0
+;CLK_USB;I;Вход «тактовый сигнал USB» (12 или 24 МГц)
+;SPI_FSS2;I;Вход «выбор ведомого устройства SPI2»
+;MEM_DATA12;IO;Вход/выход шины данных внешней памяти, разряд 12
+24;PA1;IOZ;Вход/выход «порт A», разряд 1
+;SPI_TXD0;O;Выход «линия передачи данных SPI0»
+;PWM_B8;O;Выход «линия В блока 8 ШИМ»
+;–;–;–
+;CMP2_INP;I;Аналоговый вход C+ компаратора CMP3
+25;PA2;IOZ;Вход/выход «порт A», разряд 2
+;PWM_TZ2;I;Вход «сигнал 2 аварии блока ШИМ»
+;SPI_TXD1;O;Выход «линия передачи данных SPI1»
+;MEM_OE0#;O;Выход «сигнал чтения внешней памяти 0»
+;CMP2_INM;I;Аналоговый вход C– компаратора CMP3
+26;PA3;IOZ;Вход/выход «порт A», разряд 3
+;UART_TXD1;O;Выход «линия передачи данных UART1»
+;PWM_A6;O;Выход «линия А блока 6 ШИМ»
+;MEM_OE1#;O;Выход «сигнал чтения внешней памяти 1»
+;CMP1_INP;I;Аналоговый вход C+ компаратора CMP2
+29;PA4;IOZ;Вход/выход «порт A», разряд 4
+;UART_RXD1;I;Вход «линия приема данных UART1»
+;PWM_B6;O;Выход «линия В блока 6 ШИМ»
+;–;–;–
+;CMP1_INM;I;Аналоговый вход C– компаратора CMP2
+30;PA5;IOZ;Вход/выход «порт A», разряд 5
+;SPI_FSS0;I;Вход «выбор ведомого устройства SPI0»
+;PWM_A7;O;Выход «линия А блока 7 ШИМ»
+;–;–;–
+;CMP0_INP;I;Аналоговый вход C+ компаратора CMP1
+31;PA6;IOZ;Вход/выход «порт A», разряд 6
+;SPI_CLK0;IO;Вход/выход «синхросигнал передачи SPI0»
+;PWM_B7;O;Выход «линия В блока 7 ШИМ»
+;–;–;–
+;CMP0_INM;I;Аналоговый вход C– компаратора CMP1
+32;PA7;IOZ;Вход/выход «порт A», разряд 7
+;SPI_RXD0;I;Вход «линия приема данных SPI0»
+;PWM_A8;O;Выход «линия А блока 8 ШИМ»
+;–;–;–
+;CMP_DACSUP;I;Питание ЦАП аналоговых компараторов
+33;PA8;IOZ;Вход/выход «порт A», разряд 8
+;MEM_ADDR0;O;Выход шины адреса внешней памяти, разряд 0
+;MII_TXCLK;I;Вход «синхросигнал передачи»
+;PWM_TZ0;I;Вход «сигнал 0 аварии блока ШИМ»
+34;PA9;IOZ;Вход/выход «порт A», разряд 9
+;MEM_ADDR1;O;Выход шины адреса внешней памяти, разряд 1
+;MII_TXD0;O;Выход «передаваемый нулевой бит данных»
+;PWM_TZ1;I;Вход «сигнал 1 аварии блока ШИМ»
+38;PA10;IOZ;Вход/выход «порт A», разряд 10
+;MEM_ADDR2;O;Выход шины адреса внешней памяти, разряд 2
+;MII_TXD1;O;Выход «передаваемый первый бит данных»
+;PWM_B0;O;Выход «линия В блока 0 ШИМ»
+39;PA11;IOZ;Вход/выход «порт A», разряд 11
+;MEM_ADDR3;O;Выход шины адреса внешней памяти, разряд 3
+;MII_TXD2;O;Выход «передаваемый второй бит данных»
+;PWM_B1;O;Выход «линия В блока 1 ШИМ»
+40;PA12;IOZ;Вход/выход «порт A», разряд 12
+;MEM_ADDR4;O;Выход шины адреса внешней памяти, разряд 4
+;MII_TXD3;O;Выход «передаваемый третий бит данных»
+;PWM_B2;O;Выход «линия В блока 2 ШИМ»
+41;PA13;IOZ;Вход/выход «порт A», разряд 13
+;MEM_ADDR5;O;Выход шины адреса внешней памяти, разряд 5
+;MII_TX_EN;O;Выход «разрешение передачи»
+;PWM_B3;O;Выход «линия В блока 3 ШИМ»
+42;PA14;IOZ;Вход/выход «порт A», разряд 14
+;MEM_ADDR6;O;Выход шины адреса внешней памяти, разряд 6
+;MII_TX_ER;O;Выход «ошибка передачи»
+;PWM_B4;O;Выход «линия В блока 4 ШИМ»
+43;PA15;IOZ;Вход/выход «порт A», разряд 15
+;MEM_ADDR7;O;Выход шины адреса внешней памяти, разряд 7
+;MII_CRS;I;Вход «контроль носителя»
+;PWM_B5;O;Выход «линия В блока 5 ШИМ»
+53;PB0;IOZ;Вход/выход «порт B», разряд 0
+;JTAG_TDI;I;Вход «данные JTAG» (включен по умолчанию)
+;SPI_FSS1;I;Вход «выбор ведомого устройства SPI1»
+;MEM_WE#;O;Выход «сигнал записи во внешнюю память»
+54;PB1;IOZ;Вход/выход «порт B», разряд 1
+;JTAG_TMS/SWDIO;I;Вход «переключение режима JTAG» (включен по умолчанию)
+;SPI_CLK1;IO;Вход/выход «синхросигнал передачи SPI1»
+;MEM_CE0#;O;Выход «сигнал 0 выбора внешнего устройства»
+55;PB2;IOZ;Вход/выход «порт B», разряд 2
+;JTAG_TCK/SWCLK;I;Вход «тактовый сигнал JTAG» (включен по умолчанию)
+;SPI_RXD1;I;Вход «линия приема данных SPI1»
+;MEM_CE1#;O;Выход «сигнал 1 выбора внешнего устройства»
+56;PB3;IOZ;Вход/выход «порт B», разряд 3
+;MII_TXCLK;I;Вход «синхросигнал передачи»
+;CAN_TX0;O;Выход «линия передачи данных CAN0»
+;MEM_ADDR0;O;Выход шины адреса внешней памяти, разряд 0
+57;PB4;IOZ;Вход/выход «порт B», разряд 4
+;MEM_ADDR8;O;Выход шины адреса внешней памяти, разряд 8
+;MII_COL;I;Вход «обнаружение конфликта»
+;PWM_B6;O;Выход «линия В блока 6 ШИМ»
+58;PB5;IOZ;Вход/выход «порт B», разряд 5
+;MEM_ADDR9;O;Выход шины адреса внешней памяти, разряд 9
+;MII_MDC;O;Выход «линия тактового сигнала управляющих данных»
+;PWM_A7;O;Выход «линия А блока 7 ШИМ»
+59;PB6;IOZ;Вход/выход «порт B», разряд 6
+;MEM_ADDR10;O;Выход шины адреса внешней памяти, разряд 10
+;MII_MDIO;IO;Вход/выход «линия управляющих данных»
+;PWM_B7;O;Выход «линия В блока 7 ШИМ»
+60;PB7;IOZ;Вход/выход «порт B», разряд 7
+;MEM_ADDR11;O;Выход шины адреса внешней памяти, разряд 11
+;MII_RXCLK;I;Вход «синхросигнал приема»
+;PWM_A8;O;Выход «линия А блока 8 ШИМ»
+64;PB8;IOZ;Вход/выход «порт B», разряд 8
+;MEM_ADDR12;O;Выход шины адреса внешней памяти, разряд 12
+;MII_RXD0;I;Вход «принимаемый нулевой бит данных»
+;PWM_B8;O;Выход «линия В блока 8 ШИМ»
+65;PB9;IOZ;Вход/выход «порт B», разряд 9
+;MEM_ADDR13;O;Выход шины адреса внешней памяти, разряд 13
+;MII_RXD1;I;Вход «принимаемый первый бит данных»
+;PWM_SYNCI;I;Вход «внешний синхросигнал для блоков ШИМ»
+66;PB10;IOZ;Вход/выход «порт B», разряд 10
+;MEM_ADDR14;O;Выход шины адреса внешней памяти, разряд 14
+;MII_RXD2;I;Вход «принимаемый второй бит данных»
+;CMP_OUT0;O;Выход «результат сравнения аналогового компаратора 0»
+67;PB11;IOZ;Вход/выход «порт B», разряд 11
+;MEM_ADDR15;O;Выход шины адреса внешней памяти, разряд 15
+;MII_RXD3;I;Вход «принимаемый третий бит данных»
+;CMP_OUT1;O;Выход «результат сравнения аналогового компаратора 1»
+68;PB12;IOZ;Вход/выход «порт B», разряд 12
+;MEM_ADDR16;O;Выход шины адреса внешней памяти, разряд 16
+;MII_RX_DV;I;Вход «валидность принимаемых данных»
+;CMP_OUT2;O;Выход «результат сравнения аналогового компаратора 2»
+69;PB13;IOZ;Вход/выход «порт B», разряд 13
+;MEM_ADDR17;O;Выход шины адреса внешней памяти, разряд 17
+;MII_RX_ER;I;Вход «ошибка приема»
+;SPI_FSS2;I;Вход «выбор ведомого устройства SPI2»
+70;PB14;IOZ;Вход/выход «порт B», разряд 14
+;MEM_ADDR18;O;Выход шины адреса внешней памяти, разряд 18
+;CAN_TX0;O;Выход «линия передачи данных CAN0»
+;SPI_CLK2;IO;Вход/выход «синхросигнал передачи SPI2»
+71;PB15;IOZ;Вход/выход «порт B», разряд 15
+;MEM_DATA0;IO;Вход/выход шины данных внешней памяти, разряд 0
+;CAN_RX0;I;Вход «линия приема данных CAN0»
+;SPI_RXD2;I;Вход «линия приема данных SPI2»
+92;PC0;IOZ;Вход/выход «порт C», разряд 0
+;MII_TXD0;O;Выход «передаваемый нулевой бит данных»
+;–;–;–
+;MEM_ADDR1;O;Выход шины адреса внешней памяти, разряд 1
+93;PC1;IOZ;Вход/выход «порт C», разряд 1
+;MII_TXD1;O;Выход «передаваемый первый бит данных»
+;CAN_TX1;O;Выход «линия передачи данных CAN1»
+;MEM_ADDR2;O;Выход шины адреса внешней памяти, разряд 2
+94;PC2;IOZ;Вход/выход «порт C», разряд 2
+;MII_TXD2;O;Выход «передаваемый второй бит данных»
+;CAN_RX1;I;Вход «линия приема данных CAN1»
+;MEM_ADDR3;O;Выход шины адреса внешней памяти, разряд 3
+95;PC3;IOZ;Вход/выход «порт C», разряд 3
+;MII_TXD3;O;Выход «передаваемый третий бит данных»
+;UART_TXD0;O;Выход «линия передачи данных UART0»
+;MEM_ADDR4;O;Выход шины адреса внешней памяти, разряд 4
+96;PC4;IOZ;Вход/выход «порт C», разряд 4
+;MII_TX_EN;O;Выход «разрешение передачи»
+;UART_RXD0;I;Вход «линия приема данных UART0»
+;MEM_ADDR5;O;Выход шины адреса внешней памяти, разряд 5
+97;PC5;IOZ;Вход/выход «порт C», разряд 5
+;MII_TX_ER;O;Выход «ошибка передачи»
+;UART_TXD2;O;Выход «линия передачи данных UART2»
+;MEM_ADDR6;O;Выход шины адреса внешней памяти, разряд 6
+98;PC6;IOZ;Вход/выход «порт C», разряд 6
+;MEM_DATA1;IO;Вход/выход шины данных внешней памяти, разряд 1
+;UART_RXD1;I;Вход «линия приема данных UART1»
+;SPI_TXD2;O;Выход «линия передачи данных SPI2»
+99;PC7;IOZ;Вход/выход «порт C», разряд 7
+;MEM_DATA2;IO;Вход/выход шины данных внешней памяти, разряд 2
+;UART_TXD1;O;Выход «линия передачи данных UART1»
+;PWM_TZ2;I;Вход «сигнал 2 аварии блока ШИМ»
+103;PC8;IOZ;Вход/выход «порт C», разряд 8
+;MEM_DATA3;IO;Вход/выход шины данных внешней памяти, разряд 3
+;SPI_FSS0;I;Вход «выбор ведомого устройства SPI0»
+;PWM_TZ4;I;Вход «сигнал 4 аварии блока ШИМ»
+104;PC9;IOZ;Вход/выход «порт C», разряд 9
+;MEM_DATA4;IO;Вход/выход шины данных внешней памяти, разряд 4
+;SPI_CLK0;IO;Вход/выход «синхросигнал передачи SPI0»
+;PWM_TZ5;I;Вход «сигнал 5 аварии блока ШИМ»
+105;PC10;IOZ;Вход/выход «порт C», разряд 10
+;MEM_DATA5;IO;Вход/выход шины данных внешней памяти, разряд 5
+;SPI_RXD0;I;Вход «линия приема данных SPI0»
+;MII_TXCLK;I;Вход «синхросигнал передачи»
+106;PC11;IOZ;Вход/выход «порт C», разряд 11
+;MEM_DATA6;IO;Вход/выход шины данных внешней памяти, разряд 6
+;SPI_TXD0;O;Выход «линия передачи данных SPI0»
+;MII_TXD0;O;Выход «передаваемый нулевой бит данных»
+107;PC12;IOZ;Вход/выход «порт C», разряд 12
+;MEM_DATA7;IO;Вход/выход шины данных внешней памяти, разряд 7
+;TIMER_IN0;I;Вход «синхронизация таймера 0»
+;MII_TXD1;O;Выход «передаваемый первый бит данных»
+108;PC13;IOZ;Вход/выход «порт C», разряд 13
+;MEM_DATA8;IO;Вход/выход шины данных внешней памяти, разряд 8
+;TIMER_IN1;I;Вход «синхронизация таймера 1»
+;MII_TXD2;O;Выход «передаваемый второй бит данных»
+109;PC14;IOZ;Вход/выход «порт C», разряд 14
+;MEM_DATA9;IO;Вход/выход шины данных внешней памяти, разряд 9
+;TIMER_IN2;I;Вход «синхронизация таймера 2»
+;MII_TXD3;O;Выход «передаваемый третий бит данных»
+110;PC15;IOZ;Вход/выход «порт C», разряд 15
+;MEM_DATA10;IO;Вход/выход шины данных внешней памяти, разряд 10
+;NMI;I;Вход «внешнее прерывание NMI»
+;MII_TX_EN;O;Выход «разрешение передачи»
+111;PD0;IOZ;Вход/выход «порт D», разряд 0
+;MII_CRS;I;Вход «контроль носителя»
+;UART_RXD2;I;Вход «линия приема данных UART2»
+;MEM_ADDR7;O;Выход шины адреса внешней памяти, разряд 7
+112;PD1;IOZ;Вход/выход «порт D», разряд 1
+;MII_COL;I;Вход «обнаружение конфликта»
+;UART_RXD3;I;Вход «линия приема данных UART3»
+;MEM_ADDR8;O;Выход шины адреса внешней памяти, разряд 8
+113;PD2;IOZ;Вход/выход «порт D», разряд 2
+;MII_MDC;O;Выход «линия тактового сигнала управляющих данных»
+;UART_TXD3;O;Выход «линия передачи данных UART3»
+;MEM_ADDR9;O;Выход шины адреса внешней памяти, разряд 9
+114;PD3;IOZ;Вход/выход «порт D», разряд 3
+;MII_MDIO;IO;Вход/выход «линия управляющих данных»
+;–;–;–
+;MEM_ADDR10;O;Выход шины адреса внешней памяти, разряд 10
+115;PD4;IOZ;Вход/выход «порт D», разряд 4
+;MII_RXCLK;I;Вход «синхросигнал приема»
+;–;–;–
+;MEM_ADDR11;O;Выход шины адреса внешней памяти, разряд 11
+116;PD5;IOZ;Вход/выход «порт D», разряд 5
+;MII_RXD0;I;Вход «принимаемый нулевой бит данных»
+;–;–;–
+;MEM_ADDR12;O;Выход шины адреса внешней памяти, разряд 12
+117;PD6;IOZ;Вход/выход «порт D», разряд 6
+;MII_RXD1;I;Вход «принимаемый первый бит данных»
+;–;–;–
+;MEM_DATA0;IO;Вход/выход шины данных внешней памяти, разряд 0
+118;PD7;IOZ;Вход/выход «порт D», разряд 7
+;MII_RXD2;I;Вход «принимаемый второй бит данных»
+;–;–;–
+;MEM_DATA1;IO;Вход/выход шины данных внешней памяти, разряд 1
+119;PD8;IOZ;Вход/выход «порт D», разряд 8
+;MII_RXD3;I;Вход «принимаемый третий бит данных»
+;–;–;–
+;MEM_DATA2;IO;Вход/выход шины данных внешней памяти, разряд 2
+120;PD9;IOZ;Вход/выход «порт D», разряд 9
+;MII_RX_DV;I;Вход «валидность принимаемых данных»
+;IIC_SCL1;IO;Вход/выход «линия синхронизации I2C1»
+;MEM_DATA3;IO;Вход/выход шины данных внешней памяти, разряд 3
+129;PD10;IOZ;Вход/выход «порт D», разряд 10
+;MII_RX_ER;I;Вход «ошибка приема»
+;IIC_SDA1;IO;Вход/выход «линия данных I2C1»
+;MEM_DATA4;IO;Вход/выход шины данных внешней памяти, разряд 4
+128;PD11;IOZ;Вход/выход «порт D», разряд 11
+;UART_TXD0;O;Выход «линия передачи данных UART0» (включен по умолчанию)
+;CAN_TX0;O;Выход «линия передачи данных CAN0»
+;CMP_OUT0;O;Выход «результат сравнения аналогового компаратора 0»
+127;PD12;IOZ;Вход/выход «порт D», разряд 12
+;MEM_DATA11;IO;Вход/выход шины данных внешней памяти, разряд 11
+;UART_TXD2;O;Выход «линия передачи данных UART2»
+;MII_TX_ER;O;Выход «ошибка передачи»
+126;PD13;IOZ;Вход/выход «порт D», разряд 13
+;MEM_DATA12;IO;Вход/выход шины данных внешней памяти, разряд 12
+;–;–;–
+;MII_CRS;I;Вход «контроль носителя»
+125;PD14;IOZ;Вход/выход «порт D», разряд 14
+;MEM_DATA13;IO;Вход/выход шины данных внешней памяти, разряд 13
+;–;–;–
+;MII_COL;I;Вход «обнаружение конфликта»
+124;PD15;IOZ;Вход/выход «порт D», разряд 15
+;MEM_DATA14;IO;Вход/выход шины данных внешней памяти, разряд 14
+;–;–;–
+;MII_MDC;O;Выход «линия тактового сигнала управляющих данных»
+130;PE0;IOZ;Вход/выход «порт E», разряд 0
+;UART_RXD0;I;Вход «линия приема данных UART0» (включен по умолчанию)
+;IIC_SCL0;IO;Вход/выход «линия синхронизации I2C0»
+;CMP_OUT1;O;Выход аналогового компаратора 1
+131;PE1;IOZ;Вход/выход «порт E», разряд 1
+;JTAG_TRST;I;Вход «сброс JTAG» (включен по умолчанию)
+;IIC_SDA0;IO;Вход/выход «линия данных I2C0»
+;UART_TXD2;O;Выход «линия передачи данных UART2»
+132;PE2;IOZ;Вход/выход «порт E», разряд 2
+;CAN_RX0;I;Вход «линия приема данных CAN0»
+;PWM_B5;O;Выход «линия B блока 5 ШИМ»
+;MEM_DATA6;IO;Вход/выход шины данных внешней памяти, разряд 6
+133;PE3;IOZ;Вход/выход «порт E», разряд 3
+;NMI;I;Вход «внешнее прерывание NMI»
+;UART_RTS0;O;Выход «запрос на передачу UART0»
+;MEM_DATA7;IO;Вход/выход шины данных внешней памяти, разряд 7
+134;PE4;IOZ;Вход/выход «порт E», разряд 4
+;QEP_A/XCLK0;I;Вход «тактовый сигнал КД0»
+;CAP_PWM0;IO;Вход/выход «внешнее событие/сигнал ШИМ блока захвата 0»
+;TIMER_IN0;I;Вход «синхронизация таймера 0»
+135;PE5;IOZ;Вход/выход «порт E», разряд 5
+;QEP_B/XDIR0;I;Вход «сигнал направления вращения ротора для КД0»
+;CAP_PWM1;IO;Вход/выход «внешнее событие/сигнал ШИМ блока захвата 1»
+;MEM_LB#;O;Выход «разрешение для младшего байта»
+136;PE6;IOZ;Вход/выход «порт E», разряд 6
+;QEP_I0;I;Вход «индексный для КД0»
+;CAP_PWM2;IO;Вход/выход «внешнее событие/сигнал ШИМ блока захвата 2»
+;MEM_DATA8;IO;Вход/выход шины данных внешней памяти, разряд 8
+137;PE7;IOZ;Вход/выход «порт E», разряд 7
+;USB_DRVVBUS;O;Выход «управление шиной VBUS»
+;QEP_S0;I;Вход «стробирование для КД0»
+;PWM_TZ3;I;Вход «сигнал 3 аварии блока ШИМ»
+138;PE8;IOZ;Вход/выход «порт E», разряд 8
+;PWM_TZ0;I;Вход «сигнал 0 аварии блока ШИМ»
+;UART_RI0;I;Вход «индикатор вызова UART0»
+;SPI_FSS1;I;Вход «выбор ведомого устройства SPI1»
+139;PE9;IOZ;Вход/выход «порт E», разряд 9
+;PWM_TZ1;I;Вход «сигнал 1 аварии блока ШИМ»
+;UART_DTR0;O;Выход «Источник данных готов UART0»
+;SPI_CLK1;IO;Вход/выход «синхросигнал передачи SPI1»
+143;PE10;IOZ;Вход/выход «порт E», разряд 10
+;JTAG_TDO/SWO;O;Выход «данные JTAG» (включен по умолчанию)
+;PWM_SYNCI;I;Вход «внешний синхросигнал для блоков ШИМ»
+;MEM_UB#;O;Выход «разрешение для старшего байта»
+144;PE11;IOZ;Вход/выход «порт E», разряд 11
+;CMP_OUT2;O;Выход «результат сравнения аналогового компаратора 2»
+;PWM_B8;O;Выход «линия B блока 8 ШИМ»
+;MEM_DATA10;IO;Вход/выход шины данных внешней памяти, разряд 10
+145;PE12;IOZ;Вход/выход «порт E», разряд 12
+;MEM_DATA15;IO;Вход/выход шины данных внешней памяти, разряд 15
+;PWM_TZ3;I;Вход «сигнал 3 аварии блока ШИМ»
+;MII_MDIO;IO;Вход/выход «линия управляющих данных»
+146;PE13;IOZ;Вход/выход «порт E», разряд 13
+;MEM_WE#;O;Выход «сигнал записи во внешнюю память»
+;PWM_TZ4;I;Вход «сигнал 4 аварии блока ШИМ»
+;MII_RXCLK;I;Вход «синхросигнал приема»
+147;PE14;IOZ;Вход/выход «порт E», разряд 14
+;MEM_OE0#;O;Выход «чтение внешнего устройства 0»
+;PWM_TZ5;I;Вход «сигнал 5 аварии блока ШИМ»
+;MII_RXD0;I;Вход «принимаемый нулевой бит данных»
+148;PE15;IOZ;Вход/выход «порт E», разряд 15
+;MEM_OE1#;O;Выход «чтение внешнего устройства 1»
+;–;–;–
+;MII_RXD1;I;Вход «принимаемый первый бит данных»
+149;PF0;IOZ;Вход/выход «порт F», разряд 0
+;PWM_B0;O;Выход «линия B блока 0 ШИМ»
+;UART_DSR0;I;Вход «источник данных готов UART0»
+;SPI_TXD1;O;Выход «линия передачи данных SPI1»
+150;PF1;IOZ;Вход/выход «порт F», разряд 1
+;CMP_OUT1;O;Выход «результат сравнения аналогового компаратора 1»
+;UART_CTS0;I;Вход «готовность к приему UART0»
+;MEM_DATA11;IO;Вход/выход шины данных внешней памяти, разряд 11
+151;PF2;IOZ;Вход/выход «порт F», разряд 2
+;PWM_B1;O;Выход «линия B блока 1 ШИМ»
+;SPI_CLK3;IO;Вход/выход «синхросигнал передачи SPI3»
+;CAN_RX0;I;Вход «линия приема данных CAN0»
+152;PF3;IOZ;Вход/выход «порт F», разряд 3
+;PWM_B3;O;Выход «линия B блока 3 ШИМ»
+;SPI_RXD2;I;Вход «линия приема данных SPI2»
+;MEM_DATA14;IO;Вход/выход шины данных внешней памяти, разряд 14
+153;PF4;IOZ;Вход/выход «порт F», разряд 4
+;PWM_B2;O;Выход «линия В блока 2 ШИМ»
+;SPI_TXD3;O;Выход «линия передачи данных SPI3»
+;UART_RXD2;I;Вход «линия приема данных UART2»
+154;PF5;IOZ;Вход/выход «порт F», разряд 5
+;IIC_SCL0;IO;Вход/выход «линия синхронизации I2C0»
+;PWM_A7;O;Выход «линия А блока 7 ШИМ»
+;MEM_DATA9;IO;Вход/выход шины данных внешней памяти, разряд 9
+155;PF6;IOZ;Вход/выход «порт F», разряд 6
+;MEM_CE0#;O;Выход «сигнал 0 выбора внешнего устройства»
+;CMP_OUT0;O;Выход «результат сравнения аналогового компаратора 0»
+;MII_RXD2;I;Вход «принимаемый второй бит данных»
+156;PF7;IOZ;Вход/выход «порт F», разряд 7
+;MEM_CE1#;O;Выход «сигнал 1 выбора внешнего устройства»
+;CMP_OUT1;O;Выход «результат сравнения аналогового компаратора 1»
+;MII_RXD3;I;Вход «принимаемый третий бит данных»
+157;PF8;IOZ;Вход/выход «порт F», разряд 8
+;MEM_LB#;O;Выход «разрешение для младшего байта»
+;CMP_OUT2;O;Выход «результат сравнения аналогового компаратора 2»
+;MII_RX_DV;I;Вход «валидность принимаемых данных»
+158;PF9;IOZ;Вход/выход «порт F», разряд 9
+;MEM_UB#;O;Выход «разрешение для старшего байта»
+;UART_CTS2;I;Вход «готовность к приему UART2»
+;MII_RX_ER;I;Вход «ошибка приема»
+162;PF10;IOZ;Вход/выход «порт F», разряд 10
+;UART_TXD2;O;Выход «линия передачи данных UART2»
+;–;–;–
+;UART_CTS1;I;Вход «готовность к приему UART1»
+163;PF11;IOZ;Вход/выход «порт F», разряд 11
+;UART_RXD2;I;Вход «линия приема данных UART2»
+;–;–;–
+;UART_DCD1;I;Вход «обнаружен информационный сигнал UART1»
+164;PF12;IOZ;Вход/выход «порт F», разряд 12
+;UART_TXD3;O;Выход «линия передачи данных UART3»
+;UART_RI2;I;Вход «индикатор вызова UART2»
+;UART_DSR1;I;Вход «источник данных готов UART1»
+165;PF13;IOZ;Вход/выход «порт F», разряд 13
+;UART_RXD3;I;Вход «линия приема данных UART3»
+;UART_DTR2;O;Выход «Источник данных готов UART2»
+;UART_RI1;I;Вход «индикатор вызова UART1»
+166;PF14;IOZ;Вход/выход «порт F», разряд 14
+;CAN_TX1;O;Выход «линия передачи данных CAN1»
+;UART_RTS2;O;Выход «запрос на передачу UART2»
+;UART_DTR1;O;Выход «Источник данных готов UART1»
+167;PF15;IOZ;Вход/выход «порт F», разряд 15
+;CAN_RX1;I;Вход «линия приема данных CAN1»
+;UART_DCD2;I;Вход «обнаружен информационный сигнал UART2»
+;UART_RTS1;O;Выход «запрос на передачу UART1»
+168;PG0;IOZ;Вход/выход «порт G», разряд 0
+;IIC_SDA0;IO;Вход/выход «линия данных I2C0»
+;PWM_B7;O;Выход «линия В блока 7 ШИМ»
+;CAN_TX0;O;Выход «линия передачи данных CAN0»
+169;PG1;IOZ;Вход/выход «порт G», разряд 1
+;CMP_OUT0;O;Выход «результат сравнения аналогового компаратора 0»
+;PWM_A8;O;Выход «линия A блока 8 ШИМ»
+;QEP_S0;I;Вход «стробирование для КД0»
+190;PG2;IOZ;Вход/выход «порт G», разряд 2
+;PWM_A0;O;Выход «линия A блока 0 ШИМ»
+;UART_DCD0;I;Вход «обнаружен информационный сигнал UART0»
+;SPI_RXD1;I;Вход «линия приема данных SPI1»
+191;PG3;IOZ;Вход/выход «порт G», разряд 3
+;PWM_A1;O;Выход «линия A блока 1 ШИМ»
+;SPI_FSS3;I;Вход «выбор ведомого устройства SPI3»
+;CAN_TX1;O;Выход «линия передачи данных CAN1»
+192;PG4;IOZ;Вход/выход «порт G», разряд 4
+;PWM_A2;O;Выход «линия A блока 2 ШИМ»
+;SPI_RXD3;I;Вход «линия приема данных SPI3»
+;UART_TXD2;O;Выход «линия передачи данных UART2»
+193;PG5;IOZ;Вход/выход «порт G», разряд 5
+;PWM_A3;O;Выход «линия A блока 3 ШИМ»
+;SPI_CLK2;IO;Вход/выход «синхросигнал передачи SPI2»
+;MEM_DATA13;IO;Вход/выход шины данных внешней памяти, разряд 13
+194;PG6;IOZ;Вход/выход «порт G», разряд 6
+;PWM_A4;O;Выход «линия A блока 4 ШИМ»
+;SPI_TXD2;O;Выход «линия передачи данных SPI2»
+;MEM_DATA15;IO;Вход/выход шины данных внешней памяти, разряд 15
+195;PG7;IOZ;Вход/выход «порт G», разряд 7
+;CAN_TX0;O;Выход «линия передачи данных CAN0»
+;PWM_A5;O;Выход «линия A блока 5 ШИМ»
+;MEM_DATA5;IO;Вход/выход шины данных внешней памяти, разряд 5
+196;PG8;IOZ;Вход/выход «порт G», разряд 8
+;TIMER_IN1;I;Вход «синхронизация таймера 1»
+;UART_DSR2;I;Вход «источник данных готов UART2»
+;CAN_TX1;O;Выход «линия приема данных CAN1»
+197;PG9;IOZ;Вход/выход «порт G», разряд 9
+;PWM_SYNCI;I;Вход «внешний синхросигнал для блоков ШИМ »
+;QEP_S1;I;Вход «стробирование для КД1»
+;UART_RTS3;O;Выход «запрос на передачу UART3»
+201;PG10;IOZ;Вход/выход «порт G», разряд 10
+;CAP_PWM3;IO;Вход/выход «внешнее событие/сигнал ШИМ блока захвата 3»
+;QEP_A/XCLK1;I;Вход «тактовый сигнал КД1»
+;–;–;–
+202;PG11;IOZ;Вход/выход «порт G», разряд 11
+;CAP_PWM4;IO;Вход/выход «внешнее событие/сигнал ШИМ блока захвата 4»
+;QEP_B/XDIR1;I;Вход «сигнал направления вращения ротора для КД1»
+;TIMER_IN1;I;Вход «синхронизация таймера 1»
+203;PG12;IOZ;Вход/выход «порт G», разряд 12
+;CAP_PWM5;IO;Вход/выход «внешнее событие/сигнал ШИМ блока захвата 5»
+;QEP_I1;I;Вход «индексный для КД1»
+;TIMER_IN2;I;Вход «синхронизация таймера 2»
+204;PG13;IOZ;Вход/выход «порт G», разряд 13
+;–;–;–
+;PWM_TZ0;I;Вход «сигнал 0 аварии блока ШИМ»
+;PWM_B4;O;Выход «линия В блока 4 ШИМ»
+205;PG14;IOZ;Вход/выход «порт G», разряд 14
+;–;–;–
+;PWM_TZ1;I;Вход «сигнал 1 аварии блока ШИМ»
+;PWM_A6;O;Выход «линия A блока 6 ШИМ»
+206;PG15;IOZ;Вход/выход «порт G», разряд 15
+;–;–;–
+;PWM_TZ2;I;Вход «сигнал 2 аварии блока ШИМ»
+;PWM_B6;O;Выход «линия В блока 6 ШИМ»
+12;PH0;IOZ;Вход/выход «порт H», разряд 0
+;–;–;–
+;PLL_DIV2;O;Выход «синхросигнал от PLL»
+;PWM_A7;O;Выход «линия A блока 7 ШИМ»
+13;PH1;IOZ;Вход/выход «порт H», разряд 1
+;–;–;–
+;–;–;–
+;PWM_B7;O;Выход «линия В блока 7 ШИМ»
+14;PH2;IOZ;Вход/выход «порт H», разряд 2
+;PWM_B5;O;Выход «линия В блока 5 ШИМ»
+;–;–;–
+;–;–;–
+18;PH3;IOZ;Вход/выход «порт H», разряд 3
+;PWM_B4;O;Выход «линия В блока 4 ШИМ»
+;–;–;–
+;UART_CTS3;I;Вход «готовность к приему UART3»
+19;PH4;IOZ;Вход/выход «порт H», разряд 4
+;PWM_A6;O;Выход «линия A блока 6 ШИМ»
+;–;–;–
+;UART_DCD3;I;Вход «обнаружен информационный сигнал UART3»
+20;PH5;IOZ;Вход/выход «порт H», разряд 5
+;PWM_B6;O;Выход «линия В блока 6 ШИМ»
+;–;–;–
+;UART_DSR3;I;Вход «источник данных готов UART3»
+21;PH6;IOZ;Вход/выход «порт H», разряд 6
+;PWM_A7;O;Выход «линия A блока 7 ШИМ»
+;–;–;–
+;UART_RI3;I;Вход «индикатор вызова UART3»
+22;PH7;IOZ;Вход/выход «порт H», разряд 7
+;PWM_B7;O;Выход «линия В блока 7 ШИМ»
+;–;–;–
+;UART_DTR3;O;Выход «Источник данных готов UART3»
+172;CH0_ADC0;AI;Вход «канал 0 АЦП0 вход А»
+173;CH1_ADC0;AI;Вход «канал 1 АЦП0 вход B»
+174;CH2_ADC1;AI;Вход «канал 2 АЦП1 вход А»
+175;CH3_ADC1;AI;Вход «канал 3 АЦП1 вход B»
+178;CH4_ADC2;AI;Вход «канал 4 АЦП2 вход А»
+179;CH5_ADC2;AI;Вход «канал 5 АЦП2 вход B»
+180;CH6_ADC3;AI;Вход «канал 6 АЦП3 вход А»
+181;CH7_ADC3;AI;Вход «канал 7 АЦП3 вход B»
+184;CH8_ADC4;AI;Вход «канал 8 АЦП4 вход А»
+185;CH9_ADC4;AI;Вход «канал 9 АЦП4 вход B»
+186;CH10_ADC5;AI;Вход «канал 10 АЦП5 вход А»
+187;CH11_ADC5;AI;Вход «канал 11 АЦП5 вход B»
+75;CH12_ADC6;AI;Вход «канал 12 АЦП6 вход A»
+74;CH13_ADC6;AI;Вход «канал 13 АЦП6 вход B»
+77;CH14_ADC7;AI;Вход «канал 14 АЦП7 вход A»
+76;CH15_ADC7;AI;Вход «канал 15 АЦП7 вход B»
+81;CH16_ADC8;AI;Вход «канал 16 АЦП8 вход A»
+80;CH17_ADC8;AI;Вход «канал 17 АЦП8 вход B»
+83;CH18_ADC9;AI;Вход «канал 18 АЦП9 вход A»
+82;CH19_ADC9;AI;Вход «канал 19 АЦП9 вход B»
+87;CH20_ADC10;AI;Вход «канал 20 АЦП10 вход A»
+86;CH21_ADC10;AI;Вход «канал 21 АЦП10 вход B»
+88;CH22_ADC11;AI;Вход «канал 22 АЦП11 вход A»
+89;CH23_ADC11;AI;Вход «канал 23 АЦП11 вход B»
+48;USB_DM;IO;Вход «USB Dm»
+49;USB_DP;IO;Вход «USB Dp»
+50;USB_ID;I;Вход «USB ID»
+45;VBUS;IO;Вход/выход монитора питания USB PHY
+9;nRST;I;Вход «внешний сброс» (к блоку POR)
+10;EXTRST;O;Выход «сброс POR» (от блока POR)
+11;CPE;I;Вход «выбор источника постоянного тактового сигнала»
+44;VRES;O;Подключение внешнего резистора (8.2 кОм)
+4;OSC32K_XI;I;Вход дополнительного тактового сигнала / Вывод для подключения кварцевого резонатора (32 кГц)
+5;OSC32K_XO;O;Вывод для подключения кварцевого резонатора
+207;OSC12M_XI;I;Вход основного тактового сигнала / Вывод для подключения кварцевого резонатора
+208;OSC12M_XO;O;Вывод для подключения кварцевого резонатора (? - 12 - ? МГц)
+1;TAVDD_PLL;PWR;Аналоговое питание PLL (1.8 В)
+3;TDVDD_PLL;PWR;Цифровое питание PLL (1.8 В)
+177;TAVDD_ADC_0;PWR;Аналоговое питание модулей АЦП0 PWR АЦП5 (1.8 В)
+182;TAVDD_ADC_0;PWR;Аналоговое питание модулей АЦП0 PWR АЦП5 (1.8 В)
+170;TDVDD_ADC_0;PWR;Цифровое питание модулей АЦП0 PWR АЦП5 (1.8 В)
+189;TDVDD_ADC_0;PWR;Цифровое питание модулей АЦП0 PWR АЦП5 (1.8 В)
+79;TAVDD_ADC_1;PWR;Аналоговое питание модулей АЦП6 PWR АЦП11 (1.8 В)
+84;TAVDD_ADC_1;PWR;Аналоговое питание модулей АЦП6 PWR АЦП11 (1.8 В)
+72;TDVDD_ADC_1;PWR;Цифровое питание модулей АЦП6 PWR АЦП11 (1.8 В)
+91;TDVDD_ADC_1;PWR;Цифровое питание модулей АЦП6 PWR АЦП11 (1.8 В)
+51;TVDDL_USB;PWR;Питание USB PHY (1.8 В)
+46;TVDDA_USB;PWR;Питание USB PHY (3.3 В)
+6;TVBAT;PWR;Батарейное питание RTC (1.6 3.6) В
+8;TVCC_POR;PWR;Питание POR (3.3 В)
+17;VDD;PWR;Питание ядра микросхемы (1.8 В)
+37;VDD;PWR;Питание ядра микросхемы (1.8 В)
+63;VDD;PWR;Питание ядра микросхемы (1.8 В)
+102;VDD;PWR;Питание ядра микросхемы (1.8 В)
+121;VDD;PWR;Питание ядра микросхемы (1.8 В)
+140;VDD;PWR;Питание ядра микросхемы (1.8 В)
+159;VDD;PWR;Питание ядра микросхемы (1.8 В)
+198;VDD;PWR;Питание ядра микросхемы (1.8 В)
+15;VDDPST;PWR;Питание буферов ввода-вывода микросхемы (3.3 В)
+35;VDDPST;PWR;Питание буферов ввода-вывода микросхемы (3.3 В)
+61;VDDPST;PWR;Питание буферов ввода-вывода микросхемы (3.3 В)
+100;VDDPST;PWR;Питание буферов ввода-вывода микросхемы (3.3 В)
+123;VDDPST;PWR;Питание буферов ввода-вывода микросхемы (3.3 В)
+142;VDDPST;PWR;Питание буферов ввода-вывода микросхемы (3.3 В)
+161;VDDPST;PWR;Питание буферов ввода-вывода микросхемы (3.3 В)
+200;VDDPST;PWR;Питание буферов ввода-вывода микросхемы (3.3 В)
+27;TAVDD_CMP;PWR;Питание аналогового компаратора (3.3 В)
+2;DGND_AGND_PLL;PWR;Цифровая и аналоговая земля PLL
+176;AGND_ADC_0;PWR;Аналоговая земля модулей АЦП0 PWR АЦП5
+183;AGND_ADC_0;PWR;Аналоговая земля модулей АЦП0 PWR АЦП5
+171;DGND_ADC_0;PWR;Цифровая земля модулей АЦП0 PWR АЦП5
+188;DGND_ADC_0;PWR;Цифровая земля модулей АЦП0 PWR АЦП5
+78;AGND_ADC_1;PWR;Аналоговая земля модулей АЦП6 PWR АЦП11
+85;AGND_ADC_1;PWR;Аналоговая земля модулей АЦП6 PWR АЦП11
+73;DGND_ADC_1;PWR;Цифровая земля модулей АЦП6 PWR АЦП11
+90;DGND_ADC_1;PWR;Цифровая земля модулей АЦП6 PWR АЦП11
+7;AGND_BAT;PWR;Земля RTC и блока POR (GND_POR)
+47;AGND_USB;PWR;Земля USB
+52;DGNDL_USB;PWR;Земля USB PHY
+28;TAGND_CMP;PWR;Земля аналогового компаратора
+16;GND;PWR;Земля
+36;GND;PWR;Земля
+62;GND;PWR;Земля
+101;GND;PWR;Земля
+122;GND;PWR;Земля
+141;GND;PWR;Земля
+160;GND;PWR;Земля
+199;GND;PWR;Земля
+</script>
+<style type="text/css">
+    /* Текстовый блок с выравниванием по левой границе в центре документа */
+    div.CLLC      { text-align: center; }
+    div.CLLC > *  { text-align: left; margin: auto; display: inline-block; }
+    canvas#PCBImg {
+        position: absolute; left: 0.6em; top: 0.6em; background-color: forestgreen;
+        /* border: 1px solid green; display: block; margin: auto; *//*seagreen
+        background-image: url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAGQAAABkAQMAAABKLAcXAAAABlBMVEXMzMz////TjRV2AAAAAnRSTlP/AOW3MEoAAAAjSURBVDjLY6i///3vfyjxgeE/EqA/b9Qto24ZdcuoW0aAWwB1KfXF0fmvmwAAAABJRU5ErkJggg==');
+        background-repeat: repeat;*/
+    }
+    #Form4584       { margin: auto; display: inline-block; text-align: left; white-space: nowrap; }
+    #Form4584       { position: relative; user-select: none; -ms-user-select: none; }
+    #Form4584 > *   { display: inline-block; vertical-align: top; }
+    #preForm        { font-family: "Courier New", "Lucida Console", Consolas, monospace; }
+    #preForm        { font-size: 0.80em; min-width:41ch; }
+    #preForm        { border: 1px solid gray; margin: 0; padding: 0.6em 0.6em 0.6em 465px; line-height: 1.78em; }
+    /* Статическое форматирование элементов формы */
+    #preForm > *    { position: absolute; box-sizing: border-box; margin-top: 0.12em; }
+    #preForm > output#PiNL,
+    #preForm > input[type="text"],
+    #preForm > label {
+                      border: 1px solid lightgrey; border-radius: 2.5px;
+                      font: inherit; line-height: 1.0em;
+                      wid_th: 13ch; width: 7.88em; text-align: center; }
+    #preForm > input#PiNN { border-color: black; }
+    #preForm > output#PiNL,
+    #preForm > label { cursor: pointer; border: 1px solid gray; padding: 2.1px 0.35ch; heig_ht: 1.5em; }
+    #preForm > output#PiNL { right: 0.6em; width: calc(100% - 1.2em); text-overflow: ellipsis; overflow: hidden; text-align: left; }
+    /* Техническое и динамическое форматирование элементов */
+    #preForm > input[type="radio"] { display: none; }
+    #preForm > input[name="PFunc"] + label { background-color: rgba(239, 239, 239, 0.3); overflow: hidden; }
+    #preForm > input[name="PFunc"]:checked + label { background-color: palegreen; bor_der-color: red; }
+    #preForm > input[name="PUnit"]:checked + label { color: red; }
+    #preForm > input[type="checkbox"] { display: none; }
+    #preForm > input[type="checkbox"]:checked + label { color: red; bor_der: 1px solid red; }
+    #preForm > input[id$="UNSELECT"] + label { display: none; }
+    #preForm[data-state="SetFunc"] > input[name="PFunc"] + label { box-shadow: black 2px 2px 4px -2px; bor_der-color: limegreen; }
+    /* Оформление текущей кнопки динамического фильтра */
+    #preForm > input[name="PUnit"] + label:hover,
+    #preForm > input[type="checkbox"] + label:hover { font-weight: bold; }
+    /* Листинги программного кода */
+    div.CODE > pre { font-size: 1.00em; background-color: #E0FFFF; padding: 0.4em; }
+    div#CodeLog { display: none; }
+    div#CodeLog > pre > code > span { color: red; }
+</style>
+
+<style type="text/css" media="print">
+    body        { background-image: none; }
+    body > *    { display: none; }
+    #preForm    { display: none; }
+    div.CLLC    { display: block; page-break-after: always; }
+    div.CODE > pre { background-color: white; }
+    canvas#PCBImg  { position: relative; }
+</style>
+</head>
+<body>
+<p class="author">Клиначев Н.В.</p>
+<h1>Инструмент конфигурирования микроконтроллера К1921ВК01Т</h1>
+<p class="wrkfl">Рабочие файлы: [<a href="KNV32Cube.htm">Документация</a>] [<a href="MIK32-QFP64.htm">MIK32Cube</a>] [К1921ВК01Т] [<a href="KA5001VK1A-PBGA400.htm">КА5001ВК1А</a>]<br>
+[<a href="MDR32F9Q2I-LQFP64.htm">К1986ВЕ92QI</a>] [<a href="MDR32F02FI-QFN88.htm">К1986ВК025</a>] [<a href="MDR32F1QI-LQFP144.htm">К1986ВЕ1QI</a>] [<a href="MDR1201GI-BGA144.htm">К1986ВК01GI</a>]<br>
+[<a href="LQFP100.htm">LQFP100</a>]</p>
+<p class="rJJJ">Ниже по тексту представлен прототип интерактивного инструмента, предназначенный для конфигурирования микроконтроллера К1921ВК01Т. Прототип повторяет соответствующую функциональность Куба (IET32Cube) для корпуса QFP208. Графический инструмент состоит из трех элементов. Сканера монтажных площадок корпуса микросхемы. Набора кнопок для выбора функционального назначения ножки микроконтроллера. И двухкаскадного фильтра для подсветки ножек с заданным функциональным назначением.</p>
+<p class="rJJJ">Корпус QFP208 имеет планарные выводы, расположенные по периметру. И на каждой стороне микросхемы их 52 штуки. Чтобы графическим инструментом удобно было пользоваться, он должен быть компактным. Но самые маленькие элементы должны иметь размер не меньше некоторого предела, который определен удобством отметки (выделения) с помощью манипулятора мышь. Для корпуса QFP208 эти требования исключают прямую отметку ножек мышью. Поэтому на корпусе нарисованы монтажные площадки, которых в действительности нет (такие же, как у корпусов типа BGA). Площадь их изображений большая, и их удобно отмечать мышью. Программа визуализации автоматически подсвечивает связанную с монтажной площадкой ножку. Расстояние между ними небольшое – глаз человека легко связывает два события.</p>
+<div class="CLLC">
+<form id="Form4584">
+<pre id="preForm">
+<input id="PiNN" type="text" disabled><!--                              -->              <input id="F3" type="radio" name="PUnit"><label for="F3">&nbsp;</label>              <input id="A0" type="checkbox"><label for="A0">&nbsp;</label>            &nbsp;
+<!--                                                                    -->              <input id="F4" type="radio" name="PUnit"><label for="F4">&nbsp;</label>              <input id="A1" type="checkbox"><label for="A1">&nbsp;</label>
+<input id="Pin0" type="radio" name="PFunc"><label for="Pin0">&nbsp;</label>              <input id="F5" type="radio" name="PUnit"><label for="F5">&nbsp;</label>              <input id="A2" type="checkbox"><label for="A2">&nbsp;</label>
+<input id="Pin1" type="radio" name="PFunc"><label for="Pin1">&nbsp;</label>              <input id="F6" type="radio" name="PUnit"><label for="F6">&nbsp;</label>              <input id="A3" type="checkbox"><label for="A3">&nbsp;</label>
+<input id="Pin2" type="radio" name="PFunc"><label for="Pin2">&nbsp;</label>              <input id="F7" type="radio" name="PUnit"><label for="F7">&nbsp;</label>              <input id="A4" type="checkbox"><label for="A4">&nbsp;</label>
+<input id="Pin3" type="radio" name="PFunc"><label for="Pin3">&nbsp;</label>              <input id="F8" type="radio" name="PUnit"><label for="F8">&nbsp;</label>              <input id="A5" type="checkbox"><label for="A5">&nbsp;</label>
+<input id="Pin4" type="radio" name="PFunc"><label for="Pin4">&nbsp;</label>              <input id="F9" type="radio" name="PUnit"><label for="F9">&nbsp;</label>              <input id="A6" type="checkbox"><label for="A6">&nbsp;</label>
+<!--                                                                    -->              <input id="FA" type="radio" name="PUnit"><label for="FA">&nbsp;</label>              <input id="A7" type="checkbox"><label for="A7">&nbsp;</label>
+<!--                                                                    -->              <input id="FB" type="radio" name="PUnit"><label for="FB">&nbsp;</label>              <input id="A8" type="checkbox"><label for="A8">&nbsp;</label>
+<!--                                                                    -->              <input id="FC" type="radio" name="PUnit"><label for="FC">&nbsp;</label>              <input id="A9" type="checkbox"><label for="A9">&nbsp;</label>
+<!--                                                                    -->              <input id="FD" type="radio" name="PUnit"><label for="FD">&nbsp;</label>              <input id="AA" type="checkbox"><label for="AA">&nbsp;</label>
+<!--                                                                    -->              <input id="FE" type="radio" name="PUnit"><label for="FE">&nbsp;</label>              <input id="AB" type="checkbox"><label for="AB">&nbsp;</label>
+<!--                                                                    -->              <input id="FF" type="radio" name="PUnit"><label for="FF">&nbsp;</label>              <input id="AC" type="checkbox"><label for="AC">&nbsp;</label>
+<!--                                                                    -->              <input id="FG" type="radio" name="PUnit"><label for="FG">&nbsp;</label>              <input id="AD" type="checkbox"><label for="AD">&nbsp;</label>
+<!--                                                                    -->              <input id="FH" type="radio" name="PUnit"><label for="FH">&nbsp;</label>              <input id="AE" type="checkbox"><label for="AE">&nbsp;</label>
+<!--                                                                    -->              <input id="FI" type="radio" name="PUnit"><label for="FI">&nbsp;</label>              <input id="AF" type="checkbox"><label for="AF">&nbsp;</label>
+<output id="PiNL">&nbsp;</output><!--                           --><input id="PFuncUNSELECT" type="radio" name="PFunc"><label for="PFuncUNSELECT">&nbsp;</label><!--       --><input id="PUnitUNSELECT" type="radio" name="PUnit"><label for="PUnitUNSELECT">&nbsp;</label>
+</pre>
+<canvas id="PCBImg" width="441" height="441">
+<p class="CCCC">Упс. Нужен браузер HTML5</p>
+</canvas>
+</form>
+</div>
+<p class="CCCC">Рис. 1. IET32Cube – К1921ВК01Т QFP208. Мастер настройки портов</p>
+<div id="FuncLog" class="CLLC CODE">
+<pre>
+<code class="C# hljs cpp">/******************************************************************************
+*               Алгоритм конфигурирования микроконтроллера (мК)               *
+******************************************************************************/
+1. Исключите из выбора задействованные входы определения режима мК MODE[0..5]
+2. Исключите из выбора выводы отладчика JTAG_А | JTAG_B или загрузчика UART?
+3. Назначьте оставшимся выводам требуемую функцию по своему усмотрению
+4. Скопируйте сгенерированные фрагменты кода в свою программу
+5. Документируйте проект. Распечатайте эту страницу в PDF-файл</code>
+</pre></div>
+<div id="CodeLog" class="CLLC CODE"><br>
+<pre>
+<code class="C# hljs cpp">/******************************************************************************
+* File Name :   main.c
+* Author    :   []
+* Version   :   1.1.0
+* Date      :   20220412
+* Target    :   K1921VK01T (ARM)
+* Project   :   []
+*
+******************************************************************************/
+#include "K1921VK01T_com.h"        // Таблица векторов. Адреса устройств
+#include "K1921VK01T_config.h"     // Частоты тактового генератора
+#include "K1921VK01T_clk.h"        // Драйвер тактового генератора
+#include "K1921VK01T_it.h"         // Заглушки основных прерываний
+<span id="include" data-commonname="DWT;P;TIM;EPWM;CAP;QEP;ADC;CMP;CAN;IIC;SPI;UART;MII;USB;NMI;DMA;MEM">
+#include "K1921VK01T_dwt.h"        // Задержки DELAY_ms и DELAY_us
+#include "K1921VK01T_port.h"       // Драйвер портов ввода вывода
+#include "K1921VK01T_tmr.h"        // Драйвер таймеров
+#include "K1921VK01T_pwm.h"        // Драйвер ШИ-модуляторов
+#include "K1921VK01T_cap.h"        // Драйвер контроллеров захвата
+#include "K1921VK01T_qep.h"        // Драйвер квадратурных декодеров
+#include "K1921VK01T_adc.h"        // Драйвер АЦ-преобразователя
+#include "K1921VK01T_cmp.h"        // Драйвер аналоговых компараторов
+#include "K1921VK01T_can.h"        // Драйвер приёмопередатчика CAN
+#include "K1921VK01T_i2c.h"        // Драйвер приёмопередатчика I2C
+#include "K1921VK01T_spi.h"        // Драйвер приёмопередатчика SPI
+#include "K1921VK01T_uart.h"       // Драйвер приёмопередатчика UART
+#include "K1921VK01T_eth.h"        // Контроллер Ethernet (EthernetMAC)
+#include "K1921VK01T_usb.h"        // Драйвер приёмопередатчика USB
+#include "K1921VK01T_ext.h"        // Контроллер внешних прерываний
+#include "K1921VK01T_dma.h"        // Контроллер прямого доступа в память
+#include "K1921VK01T_ebc.h"        // Контроллер внешней шины
+#include "K1921VK01T_wdt.h"        // Драйвер сторожевого таймера
+#include "K1921VK01T_rtc.h"        // Драйвер часов реального времени
+</span>
+// Объявляем прототипы функций
+void Delay(int waitTicks);
+void MCU_Init(void);
+void MCU_Start(void);
+
+// Точка входа, отсюда начинается исполнение программы
+int main()
+{
+    // Конфигурируем мК (настроим "аппаратную машину состояний")
+    MCU_Init();
+
+    // TODO: Настроить внешние микросхемы подключенныек к мК
+    // TODO: Написать код инициализирующий приложение
+
+    // Запускаем мК (включаем "аппаратную машину состояний")
+    MCU_Start();
+
+    // Запускаем бесконечный цикл - Основной цикл приложения
+    while (1)
+    {
+        __asm("    NOP");
+    }
+}
+
+/******************************************************************************
+* Description: Эту функцию принято делать на прерывании системного таймера
+******************************************************************************/
+void Delay(int waitTicks)
+{
+    int i;
+    for (i = 0; i &lt; waitTicks; i++)
+    {
+        __NOP();
+    }
+}
+
+/******************************************************************************
+* Description: Определяет таблицу векторов прерываний и настраивает приоритеты
+******************************************************************************/
+static void NVIC_Configuration(void) {
+}
+
+/******************************************************************************
+* Description: Включает тактирование устройств
+******************************************************************************/
+static void RCC_Configuration(void) {<span id="RCC" data-punitname="DWT;PA;PB;PC;PD;PE;PF;PG;PH;TIM0;TIM1;TIM2;EPWM0;EPWM1;EPWM2;EPWM3;EPWM4;EPWM5;EPWM6;EPWM7;EPWM8;CAP0;CAP1;CAP2;CAP3;CAP4;CAP5;QEP0;QEP1;ADC0;ADC1;ADC2;ADC3;ADC4;ADC5;ADC6;ADC7;ADC8;ADC9;ADC10;ADC11;CMP0;CMP1;CMP2;CAN0;CAN1;IIC0;IIC1;SPI0;SPI1;SPI2;SPI3;UART0;UART1;UART2;UART3;MII;USB;NMI;DMA;MEM">
+RST_CLK_PCLKcmd(DWT,    ENABLE);    // Счётчик для DELAY_ms и DELAY_us
+RST_CLK_PCLKcmd(PORTA,  ENABLE);    // Порт A: GPIO-функция
+RST_CLK_PCLKcmd(PORTB,  ENABLE);    // Порт B: GPIO-функция
+RST_CLK_PCLKcmd(PORTC,  ENABLE);    // Порт C: GPIO-функция
+RST_CLK_PCLKcmd(PORTD,  ENABLE);    // Порт D: GPIO-функция
+RST_CLK_PCLKcmd(PORTE,  ENABLE);    // Порт E: GPIO-функция
+RST_CLK_PCLKcmd(PORTF,  ENABLE);    // Порт F: GPIO-функция
+RST_CLK_PCLKcmd(PORTG,  ENABLE);    // Порт G: GPIO-функция
+RST_CLK_PCLKcmd(PORTH,  ENABLE);    // Порт H: GPIO-функция
+RST_CLK_PCLKcmd(TIM0,   ENABLE);    // Таймер 0
+RST_CLK_PCLKcmd(TIM1,   ENABLE);    // Таймер 1
+RST_CLK_PCLKcmd(TIM2,   ENABLE);    // Таймер 2
+RST_CLK_PCLKcmd(EPWM0,  ENABLE);    // ШИ-модулятор 0
+RST_CLK_PCLKcmd(EPWM1,  ENABLE);    // ШИ-модулятор 1
+RST_CLK_PCLKcmd(EPWM2,  ENABLE);    // ШИ-модулятор 2
+RST_CLK_PCLKcmd(EPWM3,  ENABLE);    // ШИ-модулятор 3
+RST_CLK_PCLKcmd(EPWM4,  ENABLE);    // ШИ-модулятор 4
+RST_CLK_PCLKcmd(EPWM5,  ENABLE);    // ШИ-модулятор 5
+RST_CLK_PCLKcmd(EPWM6,  ENABLE);    // ШИ-модулятор 6
+RST_CLK_PCLKcmd(EPWM7,  ENABLE);    // ШИ-модулятор 7
+RST_CLK_PCLKcmd(EPWM8,  ENABLE);    // ШИ-модулятор 8
+RST_CLK_PCLKcmd(CAP0,   ENABLE);    // Модуль захвата ШИМ 0
+RST_CLK_PCLKcmd(CAP1,   ENABLE);    // Модуль захвата ШИМ 1
+RST_CLK_PCLKcmd(CAP2,   ENABLE);    // Модуль захвата ШИМ 2
+RST_CLK_PCLKcmd(CAP3,   ENABLE);    // Модуль захвата ШИМ 3
+RST_CLK_PCLKcmd(CAP4,   ENABLE);    // Модуль захвата ШИМ 4
+RST_CLK_PCLKcmd(CAP5,   ENABLE);    // Модуль захвата ШИМ 5
+RST_CLK_PCLKcmd(QEP0,   ENABLE);    // Квадратурный декодер 0
+RST_CLK_PCLKcmd(QEP1,   ENABLE);    // Квадратурный декодер 1
+RST_CLK_PCLKcmd(ADC0,   ENABLE);    // АЦ-преобразователь 0
+RST_CLK_PCLKcmd(ADC1,   ENABLE);    // АЦ-преобразователь 1
+RST_CLK_PCLKcmd(ADC2,   ENABLE);    // АЦ-преобразователь 2
+RST_CLK_PCLKcmd(ADC3,   ENABLE);    // АЦ-преобразователь 3
+RST_CLK_PCLKcmd(ADC4,   ENABLE);    // АЦ-преобразователь 4
+RST_CLK_PCLKcmd(ADC5,   ENABLE);    // АЦ-преобразователь 5
+RST_CLK_PCLKcmd(ADC6,   ENABLE);    // АЦ-преобразователь 6
+RST_CLK_PCLKcmd(ADC7,   ENABLE);    // АЦ-преобразователь 7
+RST_CLK_PCLKcmd(ADC8,   ENABLE);    // АЦ-преобразователь 8
+RST_CLK_PCLKcmd(ADC9,   ENABLE);    // АЦ-преобразователь 9
+RST_CLK_PCLKcmd(ADC10,  ENABLE);    // АЦ-преобразователь 10
+RST_CLK_PCLKcmd(ADC11,  ENABLE);    // АЦ-преобразователь 11
+RST_CLK_PCLKcmd(CMP0,   ENABLE);    // Аналоговый компаратор 0
+RST_CLK_PCLKcmd(CMP1,   ENABLE);    // Аналоговый компаратор 1
+RST_CLK_PCLKcmd(CMP2,   ENABLE);    // Аналоговый компаратор 2
+RST_CLK_PCLKcmd(CAN0,   ENABLE);    // Приёмопередатчик CAN0
+RST_CLK_PCLKcmd(CAN1,   ENABLE);    // Приёмопередатчик CAN1
+RST_CLK_PCLKcmd(IIC0,   ENABLE);    // Приёмопередатчик IIC0 (I2C)
+RST_CLK_PCLKcmd(IIC1,   ENABLE);    // Приёмопередатчик IIC1 (I2C)
+RST_CLK_PCLKcmd(SPI0,   ENABLE);    // Приёмопередатчик SPI0
+RST_CLK_PCLKcmd(SPI1,   ENABLE);    // Приёмопередатчик SPI1
+RST_CLK_PCLKcmd(SPI2,   ENABLE);    // Приёмопередатчик SPI2
+RST_CLK_PCLKcmd(SPI3,   ENABLE);    // Приёмопередатчик SPI3
+RST_CLK_PCLKcmd(UART0,  ENABLE);    // Приёмопередатчик UART0
+RST_CLK_PCLKcmd(UART1,  ENABLE);    // Приёмопередатчик UART1
+RST_CLK_PCLKcmd(UART2,  ENABLE);    // Приёмопередатчик UART2
+RST_CLK_PCLKcmd(UART3,  ENABLE);    // Приёмопередатчик UART3
+RST_CLK_PCLKcmd(ETH,    ENABLE);    // Контроллер Ethernet (EthernetMAC)
+RST_CLK_PCLKcmd(USB,    ENABLE);    // Приёмопередатчики USB
+RST_CLK_PCLKcmd(EXT,    ENABLE);    // Контроллер внешних прерываний
+RST_CLK_PCLKcmd(DMA,    ENABLE);    // Контроллер прямого доступа в память
+RST_CLK_PCLKcmd(EBC,    ENABLE);    // Контроллер внешней шины
+RST_CLK_PCLKcmd(WDT,    ENABLE);    // Сторожевой таймер
+RST_CLK_PCLKcmd(RTC,    ENABLE);    // Часы реального времени
+</span>}
+
+/******************************************************************************
+* Description: Настраивает порты ввода / вывода
+******************************************************************************/
+static void GPIO_Configuration(void) {<span id="GPIO">
+    // Набор параметров для настройки выводов мК
+    PORT_InitTypeDef    PORTInitStruct;
+    // Сбрасываем параметры к наиболее безопасным
+    PORT_StructInit(&amp;PORTInitStruct);
+    // Изменяем значения по умолчанию на необходимые
+    // PORTInitStruct.PORT_SPEED = PORT_SPEED_SLOW;
+<span>
+    // #PNAME – #AFUNC ...
+    PORTInitStruct.PORT_PinX = #INDEX;
+    PORTInitStruct.PORT_Mode = #TYPE;
+    PORTInitStruct.PORT_PuPd = #PUPD;
+    PORTInitStruct.PORT_AltF = #AFIX;
+    PORT_Init(#PORTx, &PORTInitStruct);
+</span></span>}
+
+/******************************************************************************
+* Description: Конфигурирует таймеры
+******************************************************************************/
+static void TMR_Configuration() {<span id="TMR">
+</span>}
+
+/******************************************************************************
+* Description: Конфигурирует АЦП
+******************************************************************************/
+static void ADC_Configuration(void) {<span id="ADC">
+</span>}
+
+/******************************************************************************
+* Description: Конфигурирует контроллер ПДП
+******************************************************************************/
+static void DMA_Configuration(void) {<span id="DMA">
+</span>}
+
+/******************************************************************************
+* Description: Конфигурирует ЦАП
+******************************************************************************/
+static void DAC_Configuration(void) {<span id="DAC">
+</span>}
+
+/******************************************************************************
+* Description: Задает последовательность конфигурирования устройств
+******************************************************************************/
+void MCU_Init() {
+    // TODO: Настроить условия входа в спящий режим (по инструкциям
+    // __WFI и __WFE) без остановки тактовых генераторов (HSI и HSE),
+    // чтобы по прерываниям системного таймера мК пробуждался без RESET
+
+    // TODO: Настроить прерывание системного таймера,
+    // чтобы драйверы внешних микросхем могли использовать Delay
+
+    // Включаем тактирование устройств
+    RCC_Configuration();
+    // Заполняем таблицу векторов прерываний
+    NVIC_Configuration();
+    // Конфигурируем порты ввода / вывода
+    GPIO_Configuration();
+    // Конфигурируем контроллеры ПДП
+    DMA_Configuration();
+    // Конфигурируем ЦАП-ы
+    DAC_Configuration();
+    // Конфигурируем АЦП
+    ADC_Configuration();
+    // Конфигурируем Таймеры
+    TMR_Configuration();
+}
+
+/******************************************************************************
+* Description: Включает периферийные устройства и разрешает прерывания
+******************************************************************************/
+void MCU_Start(void) {
+    // Включаем и разрешаем прерывания АЦП
+    // Включаем и разрешаем прерывания ПДП
+    // Включаем и разрешаем прерывания ЦАП
+    // Включаем и разрешаем прерывания TMR
+}
+
+/********************************** END OF FILE ******************************/</code>
+</pre></div>
+<p class="rJJJ">Проведите указатель мыши над виртуальными монтажными площадками. Правее чертежа, на кнопках, будут меняться надписи – это список из 5 функций, любая из которых может быть закреплена за ножкой под курсором. Найти требуемую функцию может быть затруднительно. Полный список содержит более 500 позиций. Решить задачу помогает фильтр. Проведите указатель мыши над второй колонкой кнопок с названиями периферийных устройств микроконтроллера. Выберите импульсные квадратурные декодеры (QEP). Проведите указатель мыши над второй колонкой кнопок фильтра – группы подсвечиваемых ножек будут меняться. Выберите нулевой квадратурный декодер – вы активировали второй каскад фильтра, который может иметь несколько критериев поиска объединяемых логическим оператором "И". Перемещайте курсор мыши – найдите номера ножек микросхемы для ортогональных входных сигналов (A и B).</p>
+<p class="rJJJ">Для определения функционального назначения за ножкой микроконтроллера подведите к ней указатель мыши. Щёлкните левую кнопку – справа от микросхемы активируются 5 кнопок с именами функций. Выберите нужную и щёлкните по ней. Будет сгенерирован листинг программы на языке Си. Он появиться на месте этого текста. Продолжите процедуру определения функционального назначения для других ножек – листинг программы будет меняться.</p>
+<p class="rJJJ">После выбора функции, зажав клавишу Shift, с помощью указателя мыши можно уточнить тип вывода (вход, двухтактный выход, выход с открытым стоком или с открытым истоком). Условные графические изображения типа вывода следует интерпретировать по следующим правилам. Иконка аналогового входа совпадает УГО АЦП (вход – слева). Иконка цифрового входа совпадает с УГО логического элемента (вход – слева). Аналоговый выход обозначается так же как ЦАП (выход – справа). Иконки цифровых выходов – стандартные – ромбы (для двухтактного оконечного каскада, для каскада с открытым стоком / коллектором, для каскада с открытым истоком / эмиттером). Незадействованные выводы обозначены кружками. Выводы земли и питания – квадратиками. Зажав комбинацию клавиш Shift + Ctrl можно включить резистор подтяжки потенциала к питанию или к земле.</p>
+<h2>Описание программы</h2>
+<p class="rJJJ">Программа является автономной веб-страницей. Сторонние библиотеки не задействованы. Код приложения обращается исключительно к прикладным программным интерфейсам браузера. Пользователь может сохранить данный документ на локальный диск (Ctrl+S) с фильтром "Веб-страница, только HTML" – программа сохранит функциональность (без сервера).</p>
+<p class="rJJJ">Приложение, условно, можно разделить на четыре части. Первая часть – это внедрённый в веб-страницу csv-файл (comma-separated values) с данными из спецификации на микроконтроллер [1]. Содержимое соответствующего тега можно скопировать в табличный процессор и воспользоваться инструментом "Текст по столбцам" для анализа. Вторая часть приложения – это скрипт, поддерживающий взаимодействие с пользователем средствами интерактивной формы. Скрипт не простой – обслуживает большое количество состояний и не поддаётся разбиению на модули. Поэтому, каждый раз, в ответ на выбор пользователя, создаёт программное событие, пакует данные и передаёт их третьей части приложения. Это скрипт, в отдельном теге, решающий задачу генерации Си-кода. Поддерживает генерацию кода четвёртая часть приложения – внедрённый в страницу файл исходного кода на языке Си, конфигурирующий устройства микроконтроллера. Он имеет линейную структуру и разбит на фрагменты, в которых упоминаются псевдо-имена устройств. В зависимости от выбора пользователя, управляющий кодогенерацией скрипт включает в итоговый листинг необходимые фрагменты, в нужном количестве, выполняя замену псевдо-имён на фактические. Безусловно, большая часть устройств ввода-вывода может функционировать в разных режимах. Но структура шаблонов конфигурирующего кода от этого не меняется. Требуются изменения лишь в наборе параметров передаваемых функциям библиотеки стандартной периферии. Предполагается, что эту часть кода пользователь напишет самостоятельно в интегрированной среде разработки. (В текущей версии функционал кодогенерации работает в режиме демонстрации идеи алгоритмов экспорта данных).</p>
+<h2>Заметки автора</h2>
+<p class="rJJJ">Актуальной является задача унификации имён выводов периферийных устройств микроконтроллеров. Её нужно решать в отношении микроконтроллера К1986ВК01GI, у которого таблица спецификации о функциональном назначении ножек содержит более 1500 позиций. У микроконтроллера К1921ВК01Т этот список в 3 раза короче, но его можно рекомендовать для проверки решения. Имена функций, оптимизированные для К1986ВК01GI должны подойти К1921ВК01Т.</p>
+<p class="rJJJ">Выше было сказано – имена выводов периферийных устройств, перечислены в csv-файле, который внедрён в данную веб-страницу. Но поскольку они неудобны для восприятия и неоптимальны для программной обработки, после загрузки csv-файла, с помощью методов поиска и замены в тексте (с помощью регулярных выражений), имена функций меняются. Частично это решило затруднение. Но вопросы остались. Все они решаемы. Производитель микроконтроллера К1986ВК01GI должен уточнить спецификацию [1].</p>
+<p class="rJJJ">Микроконтроллер К1921ВК01Т имеет неоптимизированную систему подачи питания (чрезмерное разделение шин). Имена соответствующих выводов плохо группируются по корню и суффиксам в автоматизированных системах проектирования. В именах функций используется приставки. Что не рекомендуется в виду усложнения алгоритмов выборки групп. Выводы отдельно взятого устройства часто имеют разный порядковый номер для подключения к ножкам, что неудобно конечному пользователю.</p>
+<p class="CCCC">// TODO: Дописать. Оптимизировать имена / фильтры. Согласовать с драйверами</p>
+<h2>Литература</h2>
+<ol class="JJJJ" style="overflow-x: auto;text-align: justify;">
+<li>K1921VK01T – Микроконтроллер на ядре ARM Cortex-M4F с расширенными функциями по управлению электроприводом. // Информационный раздел сайта АО "НИИЭТ". – URL: https://niiet.ru/product/%d0%ba1921%d0%b2%d0%ba01%d1%821/ (дата обращения: 9.05.2022)</li>
+</ol>
+<p class="RRRR">9.05.2022</p>
+</body>
+</html>

@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Конфигуратор выводов</title>
+<meta name="author" content="Generic engine inspired by © Клиначев Н. В., 2022">
+<style>
+  :root { color-scheme: light; }
+  html, body { margin: 0; padding: 0; font-family: "Segoe UI", Tahoma, sans-serif; background: #fff; color: #111; }
+  body { padding: 12px; }
+  .toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
+  .toolbar button { padding: 6px 12px; border: 1px solid #aaa; background: #f5f5f5; border-radius: 4px; cursor: pointer; font-size: 13px; }
+  .toolbar button:hover { background: #e8e8e8; }
+  .toolbar .title { font-weight: 600; margin-right: 12px; }
+  .toolbar .meta { color: #666; font-size: 12px; }
+  .stage { position: relative; }
+  svg { display: block; margin: 0 auto; background: white; border: 1px solid #ddd; }
+  .pin-rect { fill: #ddd; stroke: #888; stroke-width: 1; cursor: pointer; }
+  .pin-rect.io { fill: #cfe6ff; }
+  .pin-rect.pwr { fill: #ffd9d9; }
+  .pin-rect.fixed { fill: #fff2c2; }
+  .pin-rect.assigned { fill: #b6f0c4; stroke: #1a7f3c; stroke-width: 1.5; }
+  .pin-rect:hover { stroke: #d22; stroke-width: 2; }
+  .pin-num { font-size: 9px; fill: #555; pointer-events: none; }
+  .pin-label { font-size: 10px; fill: #111; pointer-events: none; font-weight: 600; }
+  .chip-body { fill: #2a2a2a; stroke: #000; }
+  .chip-pad { fill: #d8d8d8; }
+  .chip-text { fill: #fff; font-size: 14px; font-weight: 700; }
+  .chip-sub { fill: #ccc; font-size: 10px; }
+  .menu { position: absolute; background: #fff; border: 1px solid #888; border-radius: 4px; box-shadow: 0 4px 12px rgba(0,0,0,0.2); padding: 4px 0; min-width: 240px; z-index: 100; max-height: 360px; overflow-y: auto; }
+  .menu-header { padding: 6px 12px; font-weight: 700; border-bottom: 1px solid #eee; background: #f8f8f8; }
+  .menu-item { padding: 6px 12px; cursor: pointer; display: flex; justify-content: space-between; gap: 12px; font-size: 13px; }
+  .menu-item:hover { background: #e8f0ff; }
+  .menu-item.selected { background: #b6f0c4; }
+  .menu-item .mode { color: #888; font-family: monospace; font-size: 11px; }
+  .menu-item .desc { color: #666; font-size: 11px; flex: 1; }
+  .info { padding: 8px 12px; background: #f8f8f8; border: 1px solid #e0e0e0; border-radius: 4px; margin-top: 8px; font-size: 12px; min-height: 1.4em; }
+  .author { font-size: 11px; color: #888; margin-top: 8px; text-align: right; }
+  .author a { color: #555; }
+  /* Dark mode (toggled by parent via postMessage) */
+  body.dark { background: #0e1116; color: #e6e6e6; }
+  body.dark svg { background: #1b1f27; border-color: #333; }
+  body.dark .pin-rect { fill: #2a3140; stroke: #555; }
+  body.dark .pin-rect.io { fill: #1f3a52; }
+  body.dark .pin-rect.pwr { fill: #5a2424; }
+  body.dark .pin-rect.fixed { fill: #5a4a1a; }
+  body.dark .pin-rect.assigned { fill: #1f6b34; stroke: #4cd47a; }
+  body.dark .pin-num { fill: #aaa; }
+  body.dark .pin-label { fill: #fff; }
+  body.dark .info { background: #1b1f27; border-color: #2a2f38; }
+  body.dark .toolbar button { background: #1f242d; color: #e6e6e6; border-color: #3a4150; }
+  body.dark .toolbar button:hover { background: #2a3140; }
+  body.dark .menu { background: #1b1f27; color: #e6e6e6; border-color: #3a4150; }
+  body.dark .menu-header { background: #2a3140; border-color: #3a4150; }
+  body.dark .menu-item:hover { background: #2a3a52; }
+  body.dark .menu-item.selected { background: #1f6b34; color: #fff; }
+  body.dark .menu-item .mode, body.dark .menu-item .desc { color: #aaa; }
+</style>
+</head>
+<body>
+<div class="toolbar">
+  <span class="title" id="title">Загрузка...</span>
+  <span class="meta" id="meta"></span>
+  <span style="flex:1"></span>
+  <button onclick="resetAll()">Сбросить</button>
+  <button onclick="window.print()">🖨 Печать</button>
+  <button onclick="exportHAL()">⬇ Экспорт HAL_GPIO_Init</button>
+</div>
+<div class="stage" id="stage"></div>
+<div class="info" id="info">Кликните на ножку для выбора альтернативной функции.</div>
+<div class="author">Движок построен по образцу инструментов <a href="http://model.exponenta.ru/" target="_blank" rel="noopener">© Клиначев Н. В., 2022</a></div>
+
+<script>
+"use strict";
+
+let mcu = null;
+let assignments = {};
+let storageKey = "";
+
+function getParam(n) {
+  return new URLSearchParams(location.search).get(n);
+}
+
+function loadAssignments() {
+  try {
+    const raw = localStorage.getItem(storageKey);
+    if (raw) assignments = JSON.parse(raw);
+  } catch (e) { assignments = {}; }
+}
+
+function saveAssignments() {
+  try { localStorage.setItem(storageKey, JSON.stringify(assignments)); } catch (e) {}
+}
+
+function resetAll() {
+  if (!confirm("Сбросить все назначения функций?")) return;
+  assignments = {};
+  saveAssignments();
+  render();
+}
+
+function pinTypeClass(p) {
+  const t = (p.type || "").toUpperCase();
+  if (t === "PWR") return "pwr";
+  if (t === "FIXED") return "fixed";
+  return "io";
+}
+
+function buildSvg() {
+  const pinCount = mcu.pinCount;
+  const perSide = pinCount / 4;
+  if (!Number.isInteger(perSide)) {
+    document.getElementById("stage").innerHTML = "<p>Поддерживаются только корпуса QFP/LQFP (число выводов кратно 4). Получено: " + pinCount + "</p>";
+    return;
+  }
+  const pinW = 38, pinH = 14, gap = 4;
+  const sideLen = perSide * (pinH + gap) - gap;
+  const bodySize = sideLen + 60;
+  const margin = pinW + 30;
+  const total = bodySize + 2 * margin;
+  const cx = total / 2, cy = total / 2;
+  const half = bodySize / 2;
+
+  const svg = [];
+  svg.push(`<svg id="chip" viewBox="0 0 ${total} ${total}" width="${Math.min(900, total)}" height="${Math.min(900, total)}" xmlns="http://www.w3.org/2000/svg">`);
+  // Body
+  svg.push(`<rect class="chip-body" x="${cx - half}" y="${cy - half}" width="${bodySize}" height="${bodySize}" rx="8" ry="8" />`);
+  svg.push(`<circle cx="${cx - half + 18}" cy="${cy + half - 18}" r="5" fill="#fff" />`);
+  svg.push(`<text class="chip-text" x="${cx}" y="${cy - 8}" text-anchor="middle">${escapeXml(mcu.name)}</text>`);
+  svg.push(`<text class="chip-sub" x="${cx}" y="${cy + 14}" text-anchor="middle">${escapeXml(mcu.package || "")}</text>`);
+  if (mcu.vendor) svg.push(`<text class="chip-sub" x="${cx}" y="${cy + 30}" text-anchor="middle">${escapeXml(mcu.vendor)}</text>`);
+
+  // Pins go counter-clockwise starting bottom-left (pin 1) — common QFP convention with corner mark top-left.
+  // We'll put pin 1 top-left then go down on left side, across bottom, up right, across top.
+  // To keep it simple: side 0 = left (top→bottom), side 1 = bottom (left→right), side 2 = right (bottom→top), side 3 = top (right→left).
+  for (let i = 0; i < pinCount; i++) {
+    const side = Math.floor(i / perSide);
+    const idx = i % perSide;
+    const offset = idx * (pinH + gap) + 30;
+    let x, y, w, h, lblX, lblY, lblAnchor, numX, numY;
+    if (side === 0) {       // left
+      x = cx - half - pinW; y = cy - half + offset; w = pinW; h = pinH;
+      lblX = x + pinW + 4; lblY = y + pinH - 4; lblAnchor = "start";
+      numX = x + 3; numY = y + pinH - 4;
+    } else if (side === 1) { // bottom
+      x = cx - half + offset; y = cy + half; w = pinH; h = pinW;
+      lblX = x + pinH/2; lblY = y - 6; lblAnchor = "middle";
+      numX = x + pinH/2; numY = y + pinW - 4;
+    } else if (side === 2) { // right
+      x = cx + half; y = cy + half - offset - pinH; w = pinW; h = pinH;
+      lblX = x - 4; lblY = y + pinH - 4; lblAnchor = "end";
+      numX = x + pinW - 3; numY = y + pinH - 4;
+    } else {                  // top
+      x = cx + half - offset - pinH; y = cy - half - pinW; w = pinH; h = pinW;
+      lblX = x + pinH/2; lblY = y + pinW + 10; lblAnchor = "middle";
+      numX = x + pinH/2; numY = y + 10;
+    }
+    const p = mcu.pins[i] || { n: i + 1, name: "?", type: "-", functions: [] };
+    const cls = pinTypeClass(p);
+    const assigned = assignments[p.n];
+    const cls2 = assigned ? "assigned" : cls;
+    const display = assigned ? assigned.name : p.name;
+    svg.push(`<g data-pin="${p.n}" style="cursor:pointer">`);
+    svg.push(`<rect class="pin-rect ${cls2}" x="${x}" y="${y}" width="${w}" height="${h}" />`);
+    if (side === 1 || side === 3) {
+      svg.push(`<text class="pin-num" x="${numX}" y="${numY}" text-anchor="middle">${p.n}</text>`);
+    } else {
+      svg.push(`<text class="pin-num" x="${numX}" y="${numY}" text-anchor="${side === 0 ? 'start' : 'end'}">${p.n}</text>`);
+    }
+    svg.push(`<text class="pin-label" x="${lblX}" y="${lblY}" text-anchor="${lblAnchor}">${escapeXml(display)}</text>`);
+    svg.push(`</g>`);
+  }
+
+  svg.push(`</svg>`);
+  document.getElementById("stage").innerHTML = svg.join("");
+
+  // Wire clicks
+  document.querySelectorAll("#chip [data-pin]").forEach(g => {
+    g.addEventListener("click", (e) => {
+      const n = parseInt(g.getAttribute("data-pin"));
+      openMenu(n, e);
+    });
+  });
+}
+
+function escapeXml(s) {
+  return String(s == null ? "" : s).replace(/[<>&"']/g, c => ({"<":"&lt;",">":"&gt;","&":"&amp;","\"":"&quot;","'":"&apos;"})[c]);
+}
+
+let activeMenu = null;
+function closeMenu() {
+  if (activeMenu) { activeMenu.remove(); activeMenu = null; }
+}
+
+function openMenu(pinNum, ev) {
+  closeMenu();
+  const p = mcu.pins.find(x => x.n === pinNum);
+  if (!p) return;
+  const menu = document.createElement("div");
+  menu.className = "menu";
+  const header = document.createElement("div");
+  header.className = "menu-header";
+  header.textContent = "Вывод " + p.n + " — " + p.name + (p.desc ? " · " + p.desc : "");
+  menu.appendChild(header);
+
+  const cur = assignments[p.n] ? assignments[p.n].name : null;
+
+  const addItem = (fnName, mode, type, desc, isClear) => {
+    const it = document.createElement("div");
+    it.className = "menu-item" + ((cur === fnName || (isClear && !cur)) ? " selected" : "");
+    const left = document.createElement("div");
+    left.innerHTML = `<div><b>${escapeXml(fnName)}</b> <span class="mode">${escapeXml(mode || "")}</span></div><div class="desc">${escapeXml(desc || "")}</div>`;
+    const right = document.createElement("div");
+    right.className = "mode";
+    right.textContent = type || "";
+    it.appendChild(left); it.appendChild(right);
+    it.addEventListener("click", () => {
+      if (isClear) delete assignments[p.n];
+      else assignments[p.n] = { name: fnName, mode, type, desc };
+      saveAssignments();
+      closeMenu();
+      render();
+    });
+    menu.appendChild(it);
+  };
+
+  addItem("(не назначено)", "", "", "Сбросить функцию для этого вывода", true);
+  (p.functions || []).forEach(f => addItem(f.name, f.mode, f.type, f.desc));
+
+  document.body.appendChild(menu);
+  // position
+  const r = ev.target.getBoundingClientRect();
+  let left = r.right + 8 + window.scrollX;
+  let top  = r.top + window.scrollY;
+  if (left + 260 > window.innerWidth) left = Math.max(8, r.left - 260 + window.scrollX);
+  if (top + 360 > window.innerHeight + window.scrollY) top = Math.max(8, window.innerHeight + window.scrollY - 370);
+  menu.style.left = left + "px";
+  menu.style.top  = top + "px";
+  activeMenu = menu;
+  setTimeout(() => document.addEventListener("click", outsideClose, { once: true }), 0);
+}
+
+function outsideClose(e) {
+  if (activeMenu && !activeMenu.contains(e.target)) closeMenu();
+  else if (activeMenu) setTimeout(() => document.addEventListener("click", outsideClose, { once: true }), 0);
+}
+
+function exportHAL() {
+  // Сигнатура соответствует mik32v2-shared (реальный SDK MIK32V2):
+  //   GPIO_InitTypeDef init = {0};
+  //   init.Pin  = GPIO_PIN_X | ...;
+  //   init.Mode = HAL_GPIO_MODE_GPIO_OUTPUT | ..._SERIAL | ..._ANALOG;
+  //   init.Pull = HAL_GPIO_PULL_NONE;
+  //   HAL_GPIO_Init(GPIO_0, &init);
+  // Для прочих МК (если в JSON задан "halStyle":"generic") — оставляем общий вид.
+  const isMik32 = (mcu.halStyle || "").toLowerCase() === "mik32"
+                  || /mik32/i.test(mcu.id || "");
+  const lines = [];
+  lines.push("/* Сгенерировано конфигуратором " + mcu.name + " */");
+  lines.push("#include \"mik32_hal_gpio.h\"\n");
+  lines.push("void " + (mcu.initFn || "MCU_Pins_Init") + "(void) {");
+  const used = Object.entries(assignments);
+  if (used.length === 0) {
+    lines.push("    /* Нет назначений */");
+  } else if (isMik32) {
+    // Группируем по порту GPIO_0 / GPIO_1 / GPIO_2 (см. mik32v2-shared/periphery/gpio.h)
+    const groups = { GPIO_0: [], GPIO_1: [], GPIO_2: [], OTHER: [] };
+    used.sort((a,b) => +a[0] - +b[0]).forEach(([n, a]) => {
+      const m = String(a.name).match(/GPIO(\d)_(\d+)/i) || String(a.name).match(/^P([A-C])(\d+)/i);
+      let port = "OTHER", bit = null;
+      if (m) {
+        const p = isNaN(+m[1]) ? { A:0, B:1, C:2 }[m[1].toUpperCase()] : +m[1];
+        port = "GPIO_" + p; bit = +m[2];
+      }
+      groups[port].push({ pin: n, bit, fn: a });
+    });
+    Object.entries(groups).forEach(([port, items]) => {
+      if (!items.length || port === "OTHER") return;
+      lines.push("    {");
+      lines.push("        GPIO_InitTypeDef init = {0};");
+      const pins = items.filter(i => i.bit != null).map(i => "GPIO_PIN_" + i.bit).join(" | ");
+      lines.push("        init.Pin  = " + (pins || "0") + ";");
+      // Режим выводим эвристически: ADC/DAC → ANALOG, USART/SPI/I2C → SERIAL, иначе GPIO_OUTPUT
+      const sample = items[0].fn;
+      const mode = /ADC|DAC|REF/i.test(sample.name) ? "HAL_GPIO_MODE_ANALOG"
+                 : /USART|UART|SPI|I2C|CAN/i.test(sample.name) ? "HAL_GPIO_MODE_SERIAL"
+                 : "HAL_GPIO_MODE_GPIO_OUTPUT";
+      lines.push("        init.Mode = " + mode + ";");
+      lines.push("        init.Pull = HAL_GPIO_PULL_NONE;");
+      lines.push("        HAL_GPIO_Init(" + port + ", &init);");
+      lines.push("        /* " + items.map(i => "Pin " + i.pin + "→" + i.fn.name).join(", ") + " */");
+      lines.push("    }");
+    });
+    if (groups.OTHER.length) {
+      lines.push("    /* Прочие выводы (не GPIO-порт): */");
+      groups.OTHER.forEach(i => lines.push("    /*   Pin " + i.pin + ": " + i.fn.name + " */"));
+    }
+  } else {
+    used.sort((a,b) => +a[0] - +b[0]).forEach(([n, a]) => {
+      lines.push(`    /* Pin ${n}: ${a.name} (${a.mode || "-"}) — ${a.desc || ""} */`);
+      lines.push(`    HAL_GPIO_Init(/* port */ NULL, /* pin */ ${n}, /* af */ "${a.mode || ""}");`);
+    });
+  }
+  lines.push("}");
+  const txt = lines.join("\n");
+  // post to parent for direct insertion + show in info
+  try { parent.postMessage({ type: "pinconf:export", mcuId: mcu.id, code: txt }, "*"); } catch (e) {}
+  navigator.clipboard?.writeText(txt).then(
+    () => setInfo("Код HAL_GPIO_Init скопирован в буфер обмена ✓"),
+    () => setInfo("Не удалось скопировать. Откройте консоль для просмотра.")
+  );
+  console.log(txt);
+}
+
+function setInfo(t) { document.getElementById("info").textContent = t; }
+
+function render() {
+  document.getElementById("title").textContent = mcu.name + " · конфигуратор GPIO";
+  document.getElementById("meta").textContent = (mcu.vendor || "") + " · " + (mcu.package || "") + " · " + mcu.pinCount + " выводов";
+  buildSvg();
+}
+
+window.addEventListener("message", (ev) => {
+  const d = ev.data;
+  if (d && d.type === "pinconf:theme") {
+    document.body.classList.toggle("dark", d.theme === "dark");
+  }
+});
+
+async function init() {
+  const mcuId = getParam("mcu");
+  if (!mcuId) { document.body.innerHTML = "<p>Не указан параметр <code>?mcu=...</code></p>"; return; }
+  storageKey = "pinconf:" + mcuId;
+  try {
+    const r = await fetch("data/" + mcuId + ".json", { cache: "no-cache" });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    mcu = await r.json();
+    if (!mcu.id) mcu.id = mcuId;
+    loadAssignments();
+    render();
+    parent.postMessage({ type: "pinconf:ready", mcuId }, "*");
+  } catch (e) {
+    document.body.innerHTML = "<p>Ошибка загрузки данных <code>" + mcuId + "</code>: " + e.message + "</p>";
+  }
+}
+init();
+</script>
+</body>
+</html>

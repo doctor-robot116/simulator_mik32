@@ -1,0 +1,973 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>MIK32 GPIO configuration</title>
+<meta name="author" content="© Клиначев Николай Васильевич, 2022">
+<meta name="keywords" content="микроконтроллер; risc-v; MIK32 АМУР; GPIO configuration;">
+<meta name="description" content="Прототип интерактивного инструмента, предназначенный для конфигурирования микроконтроллера MIK32 АМУР (RISC-V)"><!--
+Таблица стилей и docheader-скрипт колонтитула сайта (для функционирования приложения не нужны)-->
+<link href="JS/vsstyle.css" rel="stylesheet" type="text/css">
+<script type="text/javascript" defer charset="utf-8" src="JS/docheader.js"></script>
+<style type="text/css">
+body  { font-size: 1.30em; font-family: "Times New Roman", serif, sans-serif, Tahoma; }
+h1    { font-size: 1.30em; clear: both; text-align: center; }
+h2    { font-size: 1.25em; color: #DC143C; text-align: center; }
+p.rJJJ   { text-align: justify; text-indent: 1.2em;}
+p.CCCC   { text-align: center; }
+p.RRRR   { text-align: right;  }
+p.author { text-align: right;  }
+p.wrkfl  { text-align: right;  }
+</style>
+
+<script type="text/javascript">
+/*jslint browser, devel, bitwise, long, unordered, white, for */
+(function (mcuDBName) {
+    "use strict";
+    // TODO: Обрезать длинные имена функций в db. Отобразить аналоговые функции по умолчанию
+    // TODO: Подумать и определить имена портов по новому шаблону. Вместо PA0..PA15 - PA0..PAF
+    // TODO: Подумать и определить индексы GPIO. Либо GPIOA (как у STM), либо GPIO0 (как у MIK32)
+    // TODO: Заменить для GPIO и TRM "type": "IO" на "DOI" или "DIO". Подумать о других "IO"
+    // TODO: Заменить dataset.signIx = "-1" на любой символ "D", "P" или "№"
+    // TODO: Выход с подтягивающими резисторами PULL UP / PULL DOWN
+    let db = null;              // Таблица функций для ножек мК (загружается из внедрённого csv-файла)
+    let pin = null;             // Коллекция элементов подложек текстовых меток выводов мК
+    let targetPin = null;       // указатель на текущую ножку мК (на цветовую подложку)
+    let pinsMemu = null;        // указатель на меню ножки микроконтроллера
+    let pad = {                 // Атрибуты драйвера ножки мК в цифровом режиме
+        label: ["⍚", "◁", "▷", "◇"],
+        type: ["OD", "PP", "DI", "IO"],
+        color: ["red", "red", "black", "blue"]
+    };
+
+    document.onmouseover = function (e) {
+        if (e.target.tagName !== "rect" ||
+            e.target.parentElement?.parentElement?.id === "Menu1" ||
+            e.target.parentElement?.parentElement?.parentElement?.id !== "MIK" ||
+            pinsMemu === null) {
+            return;
+        }
+        // Выставим указатель на элемент подложки ножки мК
+        targetPin = e.target.previousElementSibling.previousElementSibling;
+
+        // Добавим приставку к атрибуту - это изменит цвет ламели (курсор)
+        targetPin.dataset.signIx = "cursor" + targetPin.dataset.signIx;
+
+        // Подготовим меню ножки микроконтроллера к визуализации
+        let menuItem = pinsMemu.children;
+        let ix = (0 | targetPin.dataset.number) - 1;
+        // Подготовим необходимое количество пунктов меню
+        let lengthMenu = db[ix].mode.length;
+        menuItem[2].style.display = (lengthMenu < 2 ? "none" : "block");
+        menuItem[3].style.display = (lengthMenu < 3 ? "none" : "block");
+        menuItem[4].style.display = (lengthMenu < 4 ? "none" : "block");
+        menuItem[5].style.display = (lengthMenu < 5 ? "none" : "block");
+        menuItem[6].style.display = (lengthMenu < 6 ? "none" : "block");
+        // Впишем текстовые метки в пункты меню
+        db[ix].mode.forEach(function (em, i) {
+            menuItem[1 + i].children[1].textContent = em.sign;
+        });
+        menuItem[1].children[1].textContent = targetPin.dataset.number;
+        // Сделамем меню видимым
+        pinsMemu.style.display = "block";
+
+        // Повешаем событие на элемент-перехватчик, чтоб можно было сделать меню модальным
+        targetPin.nextElementSibling.nextElementSibling.onclick = function (ignore) {
+            pinsMemu.children[0].style.display = "block";
+        };
+        //e.preventDefault();
+    };
+    document.onmouseout = function (ignore) {
+        if (!targetPin) { return; }
+        targetPin.nextElementSibling.nextElementSibling.onclick = null;
+        targetPin.dataset.signIx = targetPin.dataset.signIx.substring(6); // -"cursor"
+        targetPin = null;
+        // Закрываем меню ножки мК, если меню не модальное
+        if (pinsMemu.children[0].style.display !== "block") {
+            pinsMemu.children[0].onclick();
+        }
+    };
+
+    // Создает событие пользователя и передаёт данные модулю кодогенератора
+    function codeGen() {
+        // Пошлём событие программе генерации листинга Си-кода
+        const evt = document.createEvent("CustomEvent");
+        const params = { bubbles: false, cancelable: false, detail: { "pin": pin, "db": db, "pad": pad } };
+        evt.initCustomEvent("codeGen", params.bubbles, params.cancelable, params.detail);
+        document.body.dispatchEvent(evt);
+    }
+
+    // Составляет и возвращает таблицу функций для ножек мК, exportObj.db
+    function bildDB(db, csvText) {
+        // Выполним разбиение csv-файла на строки
+        let dbText = csvText.trim().split("\n");
+        // Составим упорядоченную БД о выводах корпуса (таблицу функций для ножек мК, db)
+        let numbPin = 0 | 0; // Текущий номер вывода корпуса
+        dbText.forEach(function (recPad) {
+            recPad = recPad.trim().split(";");
+            // Если recPad[0].length === 0, то дополняющая запись о функции ножки
+            if (recPad[0].length !== 0) {
+                // Строка начинается с цифры - создадим запись о выводе
+                numbPin = (0 | recPad[0]) - 0;
+                // Ловим дублирующиеся записи о выводах корпуса
+                if (db[numbPin - 1].name !== undefined) { debugger; }
+                // Создаём запись о ножке
+                // Корневые поля кроме "mode" не используются и не используется "funcType"
+                db[numbPin - 1].pinNumb = numbPin;
+                db[numbPin - 1].name = recPad[1];
+                db[numbPin - 1].prompt = recPad[4];
+                if (recPad[3] === "Fixed") {
+                    // Внесём запись в таблицу функций для ножек мК, db
+                    db[numbPin - 1].mode.push({
+                        "funcType": recPad[3],
+                        "sign": recPad[1],
+                        "type": recPad[2],
+                        "prompt": recPad[4]
+                    });
+                }/**/
+            } else {
+                // Внесём запись в таблицу функций для ножек мК, db
+                db[numbPin - 1].mode.push({
+                    "funcType": recPad[3],
+                    "sign": recPad[1],
+                    "type": recPad[2],
+                    "prompt": recPad[4]
+                });
+            }
+        });
+        // Памятка. По пустым ячейкам (undefined) forEach не ходит
+        // Внесем заглушки в пустые записи БД о выводах корпуса
+        db.forEach(function (recPad) {
+            if (recPad === null) {
+                debugger; //db[ix] = String("NC;Z;Неиспользуемый вывод корпуса").split(";");
+            }
+        });
+        console.clear();
+        console.log(
+            document.getElementById(mcuDBName).dataset.column.trim() + "\n" +
+            dbText.join("\n")
+        );
+        // Можно поставить точку остановки и скопировать содержимое консоли в Excel
+        console.clear();
+        return db;
+    }
+
+    function doOnLoad() {
+        // Инициируем массивы под таблицу функций и выбор пользователя
+        db = new Array(64);
+        let k = 0 | 0;
+        for (k = 0 | 0; k < db.length; k += 1) {
+            db[k] = { pinNumb: -1, name: undefined, prompt: undefined, mode: [] };
+        }
+        // Загрузим внедрённый csv-файл (см. ниже по тексту тег script)
+        // Составим таблицу функций, db, для ножек мК из внедрённого csv файла
+        db = bildDB(db, document.getElementById(mcuDBName).textContent);
+
+        // Будем хранить выбор пользователя в атрибутах коллекции элементов ?подложек? текстовых меток
+        pin = document.querySelectorAll("#MIK > g[class^=\"t\"] > g > rect:first-child + text");
+
+        function doClickIOLabel(e) {
+            if (e.target.parentElement.firstElementChild.dataset.signIx === "-1") { return; }
+            // Уточним номер ножк мК и индекс функции
+            let pinNumb = 0 | e.target.parentElement.firstElementChild.dataset.number;
+            let i = 0 | e.target.parentElement.firstElementChild.dataset.signIx;
+            // TODO: Заменить для GPIO и TRM "type": "IO" на "DOI" или "DIO". Подумать о других "IO"
+            // Проверим по базе можно ли менять метку Входа / Выхода
+            if (db[pinNumb - 1].mode[i].type === "IO" &&
+                (
+                    db[pinNumb - 1].mode[i].sign.substring(0, 4) === "GPIO" ||
+                    db[pinNumb - 1].mode[i].sign.substring(0, 3) === "TIM"
+                )
+            ) {
+                // Меняем метку Входа / Выхода
+                let ix = pad.label.indexOf(e.target.textContent);
+                ix += 1; ix %= 3;
+                e.target.textContent = pad.label[ix];
+                e.target.style.fill = pad.color[ix];
+                e.target.style.stroke = pad.color[ix];
+                codeGen();
+            }
+        }
+        // Воспользуемся базой данных и подпишем текстовые метки выводов мК (on Reset)
+        db.forEach(function (em, ix) {
+            pin[ix].textContent = em.mode[0].sign;
+            pin[ix].previousElementSibling.dataset.number = ix + 1;
+            pin[ix].previousElementSibling.dataset.signIx = (em.mode.length === 1 ? "-1" : "0");
+            if (em.mode[0].type === "O" || em.mode[0].type === "AO") {
+                pin[ix].nextElementSibling.nextElementSibling.textContent = pad.label[1];
+                pin[ix].nextElementSibling.nextElementSibling.style.fill = pad.color[1];
+                pin[ix].nextElementSibling.nextElementSibling.style.stroke = pad.color[1];
+            }
+            pin[ix].nextElementSibling.nextElementSibling.onclick = doClickIOLabel;
+        });
+
+        function doClickMenu(e) {
+            // Закрываем меню ножки мК
+            pinsMemu.children[0].onclick();
+            // Получим номер ножки из первого пункта меню
+            let pinNumb = e.target.parentElement.parentElement.children[1].children[1].textContent;
+            let pinIx = (0 | pinNumb) - 1;
+            // Если ножка не имеет альтернативной функции - выйдем
+            if (db[pinIx].mode.length === 1) { return; }
+            // Подпишем ножку мК (текст меню перенесём на ламель)
+            pin[pinIx].textContent = (e.target.dataset.menuIx === "0" ?
+                db[pinIx].mode[0].sign : e.target.previousElementSibling.textContent);
+            // Сохраним выбор пользователя в dataset-е. + Это изменит цвет ножки мК
+            pin[pinIx].previousElementSibling.dataset.signIx = e.target.dataset.menuIx;
+            // Сбросим метку Входа / Выхода к наиболее безопасному состоянию
+            let tagIOLabel = pin[pinIx].nextElementSibling.nextElementSibling;
+            let ix = 0 | e.target.dataset.menuIx;
+            let ixPad = pad.type.indexOf(
+                (
+                    db[pinIx].mode[ix].type === "O"
+                ) ? "PP" :
+                (
+                    db[pinIx].mode[ix].type === "IO" &&
+                    db[pinIx].mode[ix].sign.substring(0, 4) !== "GPIO" &&
+                    db[pinIx].mode[ix].sign.substring(0, 3) !== "TIM"
+                ) ? "IO" : "DI"
+            );
+            tagIOLabel.textContent = pad.label[ixPad];
+            tagIOLabel.style.fill = pad.color[ixPad];
+            tagIOLabel.style.stroke = pad.color[ixPad];
+            codeGen();
+        }
+        pinsMemu = document.getElementById("Menu1");
+        pinsMemu.children[0].onclick = function () {
+            // Скрываем меню по отмене
+            pinsMemu.style.display = "none";
+            pinsMemu.children[0].style.display = "none";
+        };
+        // Повешаем события на элементы-перехватчики
+        let menuItem = pinsMemu.children;
+        menuItem[1].children[2].dataset.menuIx = "0";
+        menuItem[2].children[2].dataset.menuIx = "1";
+        menuItem[3].children[2].dataset.menuIx = "2";
+        menuItem[4].children[2].dataset.menuIx = "3";
+        menuItem[5].children[2].dataset.menuIx = "4";
+        menuItem[6].children[2].dataset.menuIx = "5";
+        menuItem[1].children[2].onclick = doClickMenu;
+        menuItem[2].children[2].onclick = doClickMenu;
+        menuItem[3].children[2].onclick = doClickMenu;
+        menuItem[4].children[2].onclick = doClickMenu;
+        menuItem[5].children[2].onclick = doClickMenu;
+        menuItem[6].children[2].onclick = doClickMenu;
+    }
+    document.addEventListener("DOMContentLoaded", doOnLoad, false);
+}("bd-MIK32-QFP64"));
+</script>
+<script type="text/javascript">
+// Программа генерации листинга Си-кода
+/*jslint browser, devel, bitwise, long, unordered, white, this */
+!!document.addEventListener && document.addEventListener("DOMContentLoaded", function () {
+    "use strict";
+    String.prototype.toPRE = function (n) {
+        return ("    " + this).slice(-n);
+    };
+    const tagFLog = document.getElementById("FuncLog").lastChild.firstChild;
+  //const tagCLog = document.getElementById("CodeLog").lastChild.firstChild;
+    const tagInc  = document.getElementById("include");
+    const tagRCC  = document.getElementById("RCC");
+    const tagGPIO = document.getElementById("GPIO");
+    // Перечень строк include для подключения драйверов устройств
+    const txtINC = tagInc.textContent.trim().split("\n");
+    // Перечень строк кода включения тактирования устройств
+    const txtRCC = tagRCC.textContent.trim().split("\n");
+    // Перечень общих имён устройств ("UART")
+    const driver = tagInc.dataset.commonname.split(";");
+    // Перечень частных имён устройств ("UART1")
+    const device = tagRCC.dataset.punitname.split(";");
+    // Флаги подключения драйверов устройств
+    let isDrvOn = new Array(driver.length);
+    // Флаги включения тактирования устройств
+    let isDevOn = new Array(device.length);
+    // Отображаем теги с листинга файла main.c
+    tagInc.textContent = "";
+    tagRCC.textContent = "\n";
+
+    document.body.addEventListener("codeGen", function(event) {
+        let db = event.detail.db;
+        let pad = event.detail.pad;
+        //let pin = event.detail.pin;
+        /* Формирует распечатку
+        Листинг 1. Распечатка конфигурируемых ножек
+        Pin: 1,  Name: PB12, type: out,  pullUp: OFF,  func: DAC_1
+        Pin: 2,  Name: PB11, type: inp,  pullUp: OFF,  func: GPIO1_11
+        Pin: 3,  Name: PB10, type:  in,  pullUp: OFF,  func: GPIO1_10
+        */
+        tagFLog.textContent = "Листинг 1. Распечатка конфигурируемых ножек\n";
+        event.detail.pin.forEach(function (em, ix) {
+            if (em.previousElementSibling.dataset.signIx === "-1" ||
+                em.previousElementSibling.dataset.signIx === "0") {
+                return;
+            }
+            let i = 0 | em.previousElementSibling.dataset.signIx;
+            tagFLog.appendChild(document.createTextNode(
+                "\n" +
+                "Pin: " + String(db[ix].pinNumb).toPRE(2) +
+                ",  Name: " + String(db[ix].name).toPRE(4) +
+                ",  type: " + String(
+                    pad.type[pad.label.indexOf(em.nextElementSibling.nextElementSibling.textContent)]
+                ).toPRE(2) +
+                ",  pullUp: OFF" +
+                ",  func: " + db[ix].mode[i].sign
+            ));
+        });
+
+        /* Формирует распечатку файла main.c */
+
+        // Сбросим флаги подключения драйверов устройств
+        driver.forEach(function (ignore, ix) { isDrvOn[ix] = false; });
+        // Сбросим флаги включения тактирования устройств
+        device.forEach(function (ignore, ix) { isDevOn[ix] = false; });
+        // Сканируем имена назначенных функций для всех ножек мК
+        event.detail.pin.forEach(function (em, ix) {
+            let i = 0 | em.previousElementSibling.dataset.signIx;
+            if (i === -1 || i === 0) { return; }
+            let funcName = db[ix].mode[i].sign;
+            // Ищем в именах функций общие имена устройств ("UART")
+            i = 0 | 0;
+            while (i < driver.length && funcName.indexOf(driver[i]) !== 0) {
+                i += 1;
+            }
+            // Поднимаем флаги подключения драйверов устройств
+            if (i < driver.length) { isDrvOn[i] = true; }
+            // Ищем в именах функций частные имена устройств ("UART1")
+            i = 0 | 0;
+            while (i < device.length && funcName.indexOf(device[i]) !== 0) {
+                i += 1;
+            }
+            // Поднимаем флаги включения тактирования устройств
+            if (i < device.length) { isDevOn[i] = true; }
+        });
+
+        // isDrvOn[0] = true; // DWT
+        // isDevOn[0] = true; // DWT
+        // Распечатываем строки Си-кода #include
+        tagInc.textContent = ""; // "\n"; //
+        isDrvOn.forEach(function (inOn, ix) {
+            if (inOn) { tagInc.textContent += txtINC[ix] + "\n"; }
+        });
+        // Распечатываем строки Си-кода в функции RCC_Configuration
+        tagRCC.textContent = "\n";
+        isDevOn.forEach(function (inOn, ix) {
+            if (inOn) { tagRCC.textContent += "    " + txtRCC[ix] + "\n"; }
+        });
+
+        // BEGIN PIN_FUNCTION_GPIO-code
+        let ixPort = 0 | 0;     // Индекс порта   "GPIO[0]_12" или "GPIO[A]_12"
+        let ixPin  = 0 | 0;     // Индекс разряда "GPIO0_[12]" или "GPIOA_[12]"
+        let gpio = [
+            { code: "setPortFunction(GPIO_0, PIN_FUNCTION_GPIO);", dirOut: null, dirInp: null },
+            { code: "setPortFunction(GPIO_1, PIN_FUNCTION_GPIO);", dirOut: null, dirInp: null },
+            { code: "setPortFunction(GPIO_2, PIN_FUNCTION_GPIO);", dirOut: null, dirInp: null },
+            { code: "setPortFunction(GPIO_3, PIN_FUNCTION_GPIO);", dirOut: null, dirInp: null },
+            { code: "setPortFunction(GPIO_4, PIN_FUNCTION_GPIO);", dirOut: null, dirInp: null },
+            { code: "setPortFunction(GPIO_5, PIN_FUNCTION_GPIO);", dirOut: null, dirInp: null }
+        ];
+        // Выборка данных о ножках с функцией GPIO
+        event.detail.pin.forEach(function (em, ix) {
+            if (em.previousElementSibling.dataset.signIx === "-1" ||
+                em.previousElementSibling.dataset.signIx === "0") {
+                return;
+            }
+            let i = 0 | em.previousElementSibling.dataset.signIx;
+            if (db[ix].mode[i].sign.substring(0, 4) === "GPIO") {
+                // Вытащим цифры из имени функции "GPIO0_12" "GPIOA_12"
+                ixPort = parseInt(db[ix].mode[i].sign.substring(4, 5), 10);
+                ixPin = 0 | db[ix].mode[i].sign.substring(6);
+                if (em.nextElementSibling.nextElementSibling.textContent ===
+                    pad.label[pad.type.indexOf("DI")]
+                ) {
+                    if (gpio[ixPort].dirInp === null) {
+                        gpio[ixPort].dirInp = new Array(16);
+                    }
+                    gpio[ixPort].dirInp[ixPin] = true;
+                } else {
+                    if (gpio[ixPort].dirOut === null) {
+                        gpio[ixPort].dirOut = new Array(16);
+                    }
+                    gpio[ixPort].dirOut[ixPin] = true;
+                }
+            }
+        });
+
+        // Распечатываем код функции GPIO_Configuration()
+        tagGPIO.textContent = "\n";
+        // setPortFunction(GPIO_2, PIN_FUNCTION_GPIO);
+        gpio.forEach(function (em, ix) {
+            if (em.dirOut !== null || em.dirInp !== null) {
+                tagGPIO.appendChild(document.createTextNode("    " + em.code + "\n"));
+            }
+        });
+        // GPIO_SetPinMaskDirection(GPIO_2, PIN_0 | PIN_1 | PIN_2 | PIN_3, GPIO_DIR_OUTPUT);
+        gpio.forEach(function (port, ix) {
+            if (port.dirOut !== null) {
+                tagGPIO.appendChild(document.createTextNode("\n    GPIO_SetPinMaskDirection(GPIO_" + ix + ",\n"));
+                port.dirOut.forEach(function (pin, ix) {
+                    if (pin === true) {
+                        tagGPIO.appendChild(document.createTextNode("        " + "PIN_" + ix + " |\n"));
+                    }
+                });
+                tagGPIO.lastChild.textContent = tagGPIO.lastChild.textContent.slice(0, -3) + ",\n"; // -" |\n"
+                tagGPIO.appendChild(document.createTextNode("        GPIO_DIR_OUTPUT);"));
+            }
+        });
+        // GPIO_SetPinMaskDirection(GPIO_2, PIN_0 | PIN_1 | PIN_2 | PIN_3, GPIO_DIR_INPUT);
+        gpio.forEach(function (port, ix) {
+            if (port.dirInp !== null) {
+                tagGPIO.appendChild(document.createTextNode("\n    GPIO_SetPinMaskDirection(GPIO_" + ix + ",\n"));
+                port.dirInp.forEach(function (pin, ix) {
+                    if (pin === true) {
+                        tagGPIO.appendChild(document.createTextNode("        " + "PIN_" + ix + " |\n"));
+                    }
+                });
+                tagGPIO.lastChild.textContent = tagGPIO.lastChild.textContent.slice(0, -3) + ",\n"; // -" |\n"
+                tagGPIO.appendChild(document.createTextNode("        GPIO_DIR_INPUT);"));
+            }
+        });
+        tagGPIO.appendChild(document.createTextNode("\n"));
+        // END PIN_FUNCTION_GPIO-code
+    });
+});
+</script><!--
+
+В text/csv переименованы выводы устройств I2C -->
+
+<script id="bd-MIK32-QFP64" type="text/csv" data-column="numbPin;PFunc;Type;MODE;Prompt">
+1;PB12;-;-;Порт общего назначения 1. Разряд 12
+;DAC_1;AO;Analog;Функция ножки по умолчанию (после сброса мК)
+;IIC1_sda;IO;AF0;Интерфейс I2C 1, линия данных
+;GPIO1_12;IO;AF1;Порт общего назначения 1. Разряд 12
+;UART0_ndtr;O;AF2;Готовность приемника данных
+2;PB11;-;-;Порт общего назначения 1. Разряд 11
+;REF_DAC;AI;Analog;Функция ножки по умолчанию (после сброса мК)
+;UART1_rts;O;AF0;Интерфейс UART 1, запрос на передачу
+;GPIO1_11;IO;AF1;Порт общего назначения 1. Разряд 11
+3;PB10;-;-;Порт общего назначения 1. Разряд 10
+;REF_ADC;AI;Analog;Функция ножки по умолчанию (после сброса мК)
+;UART1_cts;I;AF0;Интерфейс UART 1, готовность передачи
+;GPIO1_10;IO;AF1;Порт общего назначения 1. Разряд 10
+4;PB9;-;-;Порт общего назначения 1. Разряд 9
+;-;AI;Analog;Функция ножки по умолчанию (после сброса мК)
+;UART1_txd;O;AF0;Интерфейс UART 1, данные для передачи
+;GPIO1_9;IO;AF1;Порт общего назначения 1. Разряд 9
+5;VCC;PWR;Fixed;Питание 3.3В
+6;VDD;PWR;Fixed;Питание цифровых цепей 3.3В
+7;PB8;-;-;Порт общего назначения 1. Разряд 8
+;-;AI;Analog;Функция ножки по умолчанию (после сброса мК)
+;UART1_rxd;I;AF0;Интерфейс UART 1, принимаемые данные
+;GPIO1_8;IO;AF1;Порт общего назначения 1. Разряд 8
+8;VCC_BAT;PWR;Fixed;Питание батарейного домена 3.3В
+9;VCC_BU;PWR;Fixed;Питание батарейного домена 3.3В
+10;VDD_BU;PWR;Fixed;Выход батарейного LDO для подключения конденсаторов
+11;VSS;PWR;Fixed;Цифровая земля (GND)
+12;OSC32K_XO;AO;Fixed;Выход осциллятора часов реального времени 32К
+13;OSC32K_XI;AI;Fixed;Вход осциллятора часов реального времени 32К
+14;Ext_Resetn;I;Fixed;Функция ножки по умолчанию (после сброса мК)
+15;ext_wu;I;Fixed;Функция ножки по умолчанию (после сброса мК)
+16;RTC_Alarm;O;Fixed;Будильник (активный уровень 1)
+17;BOOT_0;I;Fixed;Функция ножки по умолчанию (после сброса мК)
+18;BOOT_1;I;Fixed;Функция ножки по умолчанию (после сброса мК)
+19;VPRG;PWR;Fixed;Напряжение программирования OTP 8.0В
+20;VCC;PWR;Fixed;Питание 3.3В
+21;PB7;-;-;Порт общего назначения 1. Разряд 7
+;ADC_6;AI;Analog;Функция ножки по умолчанию (после сброса мК)
+;SPI1_nSS_3;O;AF0;Интерфейс SPI 1, сигнал выбора ведомого 3
+;GPIO1_7;IO;AF1;Порт общего назначения 1. Разряд 7
+;TEST_PAD;O;AF2;Выход цифровой подсистемы тестирования аналоговых блоков
+22;PB6;-;-;Порт общего назначения 1. Разряд 6
+;-;AI;Analog;Функция ножки по умолчанию (после сброса мК)
+;SPI1_nSS_2;O;AF0;Интерфейс SPI 1, сигнал выбора ведомого 2
+;GPIO1_6;IO;AF1;Порт общего назначения 1. Разряд 6
+;UART0_ddis;O;AF2;Сигнал считывания принятых данных
+23;PB5;-;-;Порт общего назначения 1. Разряд 5
+;ADC_7;AI;Analog;Функция ножки по умолчанию (после сброса мК)
+;SPI1_nSS_1;O;AF0;Интерфейс SPI 1, сигнал выбора ведомого 1
+;GPIO1_5;IO;AF1;Порт общего назначения 1. Разряд 5
+;UART0_ck;O;AF2;Сигнал синхронизации для приема и передачи
+24;VDD;PWR;Fixed;Питание цифровых цепей 3.3В
+25;PB4;-;-;Порт общего назначения 1. Разряд 4
+;-;AI;Analog;Функция ножки по умолчанию (после сброса мК)
+;SPI1_nSS_0;O;AF0;Интерфейс SPI 1, сигнал выбора ведомого 0
+;GPIO1_4;IO;AF1;Порт общего назначения 1. Разряд 4
+;TIM32B_Tx;I;AF2;32х-разрядный таймер2. Внешний вход тактирования
+26;PB3;-;-;Порт общего назначения 1. Разряд 3
+;-;AI;Analog;Функция ножки по умолчанию (после сброса мК)
+;SPI1_nSS_in;I;AF0;Интерфейс SPI 1, сигнал выбора в режиме ведомого
+;GPIO1_3;IO;AF1;Порт общего назначения 1. Разряд 3
+;TIM32B_ch4;IO;AF2;32х-разрядный таймер2. Канал 4. Выход-ШИМ, вход - захват/сравнение
+27;PB2;-;-;Порт общего назначения 1. Разряд 2
+;-;AI;Analog;Функция ножки по умолчанию (после сброса мК)
+;SPI1_clk;IO;AF0;Интерфейс SPI 1, тактовый сигнал
+;GPIO1_2;IO;AF1;Порт общего назначения 1. Разряд 2
+;TIM32B_ch3;IO;AF2;32х-разрядный таймер2. Канал 3. Выход-ШИМ, вход - захват/сравнение
+28;PB1;-;-;Порт общего назначения 1. Разряд 1
+;-;AI;Analog;Функция ножки по умолчанию (после сброса мК)
+;SPI1_MOSI;IO;AF0;Интерфейс SPI 1, линия данных от ведущего к ведомому
+;GPIO1_1;IO;AF1;Порт общего назначения 1. Разряд 1
+;TIM32B_ch2;IO;AF2;32х-разрядный таймер2. Канал 2. Выход-ШИМ, вход - захват/сравнение
+29;VSS;PWR;Fixed;Цифровая земля (GND)
+30;PB0;-;-;Порт общего назначения 1. Разряд 0
+;-;AI;Analog;Функция ножки по умолчанию (после сброса мК)
+;SPI1_MISO;IO;AF0;Интерфейс SPI 1, линия данных от ведомого к ведущему
+;GPIO1_0;IO;AF1;Порт общего назначения 1. Разряд 0
+;TIM32B_ch1;IO;AF2;32х-разрядный таймер2. Канал 1. Выход-ШИМ, вход - захват/сравнение
+31;PC7;-;-;Порт общего назначения 2. Разряд 7
+;-;AI;Analog;Функция ножки по умолчанию (после сброса мК)
+;-;I;AF0;-
+;GPIO2_7;IO;AF1;Порт общего назначения 2. Разряд 7
+;UART1_ddis;O;AF2;Сигнал считывания принятых данных
+32;PC6;-;-;Порт общего назначения 2. Разряд 6
+;-;AI;Analog;Функция ножки по умолчанию (после сброса мК)
+;SPI0_nSS_3;O;AF0;Интерфейс SPI 0, сигнал выбора ведомого 3
+;GPIO2_6;IO;AF1;Порт общего назначения 2. Разряд 6
+;UART1_ck;O;AF2;Сигнал синхронизации для приема и передачи
+33;PC5;-;-;Порт общего назначения 2. Разряд 5
+;-;AI;Analog;Функция ножки по умолчанию (после сброса мК)
+;SPIFI_DATA3;IO;AF0;Интерфейс SPIFI, шина данных, разряд 3
+;GPIO2_5;IO;AF1;Порт общего назначения 2. Разряд 5
+34;PC4;-;-;Порт общего назначения 2. Разряд 4
+;-;AI;Analog;Функция ножки по умолчанию (после сброса мК)
+;SPIFI_DATA2;IO;AF0;Интерфейс SPIFI, шина данных, разряд 2
+;GPIO2_4;IO;AF1;Порт общего назначения 2. Разряд 4
+35;PC3;-;-;Порт общего назначения 2. Разряд 3
+;-;AI;Analog;Функция ножки по умолчанию (после сброса мК)
+;SPIFI_DATA1;IO;AF0;Интерфейс SPIFI, шина данных, разряд 1
+;GPIO2_3;IO;AF1;Порт общего назначения 2. Разряд 3
+;UART1_ri;I;AF2;Звонок (вызов) на телефонной линии
+36;PC2;-;-;Порт общего назначения 2. Разряд 2
+;-;AI;Analog;Функция ножки по умолчанию (после сброса мК)
+;SPIFI_DATA0;IO;AF0;Интерфейс SPIFI, шина данных, разряд 0
+;GPIO2_2;IO;AF1;Порт общего назначения 2. Разряд 2
+;UART1_dsr;I;AF2;Сигнал готовности источника данных
+37;PC1;-;-;Порт общего назначения 2. Разряд 1
+;-;AI;Analog;Функция ножки по умолчанию (после сброса мК)
+;SPIFI_CS;O;AF0;Интерфейс SPIFI, сигнал CS
+;GPIO2_1;IO;AF1;Порт общего назначения 2. Разряд 1
+;UART1_dcd;I;AF2;Сигнал обнаружения несущей
+38;PC0;-;-;Порт общего назначения 2. Разряд 0
+;-;AI;Analog;Функция ножки по умолчанию (после сброса мК)
+;SPIFI_SCLK;IO;AF0;Интерфейс SPIFI, тактовый сигнал
+;GPIO2_0;IO;AF1;Порт общего назначения 2. Разряд 0
+;UART1_dtr;O;AF2;Готовность приемника данных
+39;OSC32M_XO;AO;Fixed;Выход осциллятора 32М (3.3В)
+40;OSC32M_XI;AI;Fixed;Вход осциллятора 32М (3.3В)
+41;VDD;PWR;Fixed;Выход системного LDO для подключения конденсаторов
+42;PA15;-;-;Порт общего назначения 0. Разряд 15
+;-;AI;Analog;Функция ножки по умолчанию (после сброса мК)
+;TDO;O;AF0;Интерфейс JTAG. Выход данных
+;GPIO0_15;IO;AF1;Порт общего назначения 0. Разряд 15
+43;PA14;-;-;Порт общего назначения 0. Разряд 14
+;-;AI;Analog;Функция ножки по умолчанию (после сброса мК)
+;TRSTn;I;AF0;Интерфейс JTAG. Сброс (активный уровень 0)
+;GPIO0_14;IO;AF1;Порт общего назначения 0. Разряд 14
+44;PA13;-;-;Порт общего назначения 0. Разряд 13
+;ADC_0;AI;Analog;Функция ножки по умолчанию (после сброса мК)
+;TMS;I;AF0;Интерфейс JTAG. Сигнала управление
+;GPIO0_13;IO;AF1;Порт общего назначения 0. Разряд 13
+;TIM16C_out;O;AF2;16-разрядный таймер 2.Выход
+45;PA12;-;-;Порт общего назначения 0. Разряд 12
+;-;AI;Analog;Функция ножки по умолчанию (после сброса мК)
+;TCK;I;AF0;Интерфейс JTAG.Сигнал тактирования
+;GPIO0_12;IO;AF1;Порт общего назначения 0. Разряд 12
+;TIM16C_in2;I;AF2;16-разрядный таймер 2.Вход 2
+46;PA11;-;-;Порт общего назначения 0. Разряд 11
+;ADC_1;AI;Analog;Функция ножки по умолчанию (после сброса мК)
+;TDI;I;AF0;Интерфейс JTAG. Вход данных
+;GPIO0_11;IO;AF1;Порт общего назначения 0. Разряд 11
+;TIM16C_in1;I;AF2;16-разрядный таймер 2.Вход 1
+47;PA10;-;-;Порт общего назначения 0. Разряд 10
+;-;AI;Analog;Функция ножки по умолчанию (после сброса мК)
+;IIC0_scl;IO;AF0;Интерфейс I2C 0, сигнал тактирования
+;GPIO0_10;IO;AF1;Порт общего назначения 0. Разряд 10
+;TIM16B_out;O;AF2;16-разрядный таймер 1.Выход
+48;PA9;-;-;Порт общего назначения 0. Разряд 9
+;ADC_2;AI;Analog;Функция ножки по умолчанию (после сброса мК)
+;IIC0_sda;IO;AF0;Интерфейс I2C 0, линия данных
+;GPIO0_9;IO;AF1;Порт общего назначения 0. Разряд 9
+;TIM16B_in2;I;AF2;16-разрядный таймер 1.Вход 2
+49;PA8;-;-;Порт общего назначения 0. Разряд 8
+;-;AI;Analog;Функция ножки по умолчанию (после сброса мК)
+;UART0_rts;O;AF0;Интерфейс UART 0, запрос на передачу
+;GPIO0_8;IO;AF1;Порт общего назначения 0. Разряд 8
+;TIM16B_in1;I;AF2;16-разрядный таймер 1.Вход 1
+50;PA7;-;-;Порт общего назначения 0. Разряд 7
+;ADC_3;AI;Analog;Функция ножки по умолчанию (после сброса мК)
+;UART0_cts;I;AF0;Интерфейс UART 0, готовность передачи
+;GPIO0_7;IO;AF1;Порт общего назначения 0. Разряд 7
+;TIM16A_out;O;AF2;16-разрядный таймер 0.Выход
+51;PA6;-;-;Порт общего назначения 0. Разряд 6
+;-;AI;Analog;Функция ножки по умолчанию (после сброса мК)
+;UART0_txd;O;AF0;Интерфейс UART 0, данные для передачи
+;GPIO0_6;IO;AF1;Порт общего назначения 0. Разряд 6
+;TIM16A_in2;I;AF2;16-разрядный таймер 0.Вход 2
+52;VCC;PWR;Fixed;Питание 3.3В
+53;PA5;-;-;Порт общего назначения 0. Разряд 5
+;-;AI;Analog;Функция ножки по умолчанию (после сброса мК)
+;UART0_rxd;I;AF0;Интерфейс UART 0, принимаемые данные
+;GPIO0_5;IO;AF1;Порт общего назначения 0. Разряд 5
+;TIM16A_in1;I;AF2;16-разрядный таймер 0.Вход 1
+54;PA4;-;-;Порт общего назначения 0. Разряд 4
+;ADC_4;AI;Analog;Функция ножки по умолчанию (после сброса мК)
+;SPI0_nSS_0;O;AF0;Интерфейс SPI 0, сигнал выбора ведомого 0
+;GPIO0_4;IO;AF1;Порт общего назначения 0. Разряд 4
+;TIM32A_Tx;I;AF2;32х-разрядный таймер1. Внешний вход тактирования
+55;PA3;-;-;Порт общего назначения 0. Разряд 3
+;-;AI;Analog;Функция ножки по умолчанию (после сброса мК)
+;SPI0_nSS_in;I;AF0;Интерфейс SPI 0, сигнал выбора в режиме ведомого
+;GPIO0_3;IO;AF1;Порт общего назначения 0. Разряд 3
+;TIM32A_ch4;IO;AF2;32х-разрядный таймер1. Канал 4.Выход-ШИМ, Вход - захват/сравнение
+56;PA2;-;-;Порт общего назначения 0. Разряд 2
+;ADC_5;AI;Analog;Функция ножки по умолчанию (после сброса мК)
+;SPI0_clk;IO;AF0;Интерфейс SPI 0, тактовый сигнал
+;GPIO0_2;IO;AF1;Порт общего назначения 0. Разряд 2
+;TIM32A_ch3;IO;AF2;32х-разрядный таймер1. Канал 3.Выход-ШИМ, Вход - захват/сравнение
+57;PA1;-;-;Порт общего назначения 0. Разряд 1
+;-;AI;Analog;Функция ножки по умолчанию (после сброса мК)
+;SPI0_MOSI;IO;AF0;Интерфейс SPI 0, линия данных от ведущего к ведомому
+;GPIO0_1;IO;AF1;Порт общего назначения 0. Разряд 1
+;TIM32A_ch2;IO;AF2;32х-разрядный таймер1. Канал 2.Выход-ШИМ, Вход - захват/сравнение
+58;PA0;-;-;Порт общего назначения 0. Разряд 0
+;REF_VM_AVCC;AI;Analog;Функция ножки по умолчанию (после сброса мК)
+;SPI0_MISO;IO;AF0;Интерфейс SPI 0, линия данных от ведомого к ведущему
+;GPIO0_0;IO;AF1;Порт общего назначения 0. Разряд 0
+;TIM32A_ch1;IO;AF2;32х-разрядный таймер1. Канал 1.Выход-ШИМ, Вход - захват/сравнение
+59;VSS;PWR;Fixed;Цифровая земля (GND)
+60;PB15;-;-;Порт общего назначения 1. Разряд 15
+;TEST_MUXOUT;AI;Analog;Функция ножки по умолчанию (после сброса мК)
+;SPI0_nSS_2;O;AF0;Интерфейс SPI 0, сигнал выбора ведомого 2
+;GPIO1_15;IO;AF1;Порт общего назначения 1. Разряд 15
+;UART0_ri;I;AF2;Звонок (вызов) на телефонной линии
+61;PB14;-;-;Порт общего назначения 1. Разряд 14
+;REF_VM_VCC;AI;Analog;Функция ножки по умолчанию (после сброса мК)
+;SPI0_nSS_1;O;AF0;Интерфейс SPI 0, сигнал выбора ведомого 1
+;GPIO1_14;IO;AF1;Порт общего назначения 1. Разряд 14
+;UART0_dsr;I;AF2;Сигнал готовности источника данных
+62;AVCC;PWR;Fixed;Питание аналоговых цепей 3.3В
+63;AGND;PWR;Fixed;Аналоговая земля
+64;PB13;-;-;Порт общего назначения 1. Разряд 13
+;DAC_2;AO;Analog;Функция ножки по умолчанию (после сброса мК)
+;IIC1_scl;IO;AF0;Интерфейс I2C 1, сигнал тактирования
+;GPIO1_13;IO;AF1;Порт общего назначения 1. Разряд 13
+;UART0_dcd;I;AF2;Сигнал обнаружения несущей
+</script>
+<style type="text/css">
+    /* Текстовый блок с выравниванием по левой границе в центре документа */
+    div.CLLC      { text-align: center; }
+    div.CLLC > *  { text-align: left; margin: auto; display: inline-block; }
+    svg { margin: auto; display: block; }
+    svg { user-select: none; border: 1px solid lime; overflow: hidden; background-color: white; }
+    text { stroke: none; text-anchor: middle; dominant-baseline: central; font-size: 14px; }
+    text { font-family: "Lucida Console", "Courier New", monospace; }
+    /* Заполним прозрачным цветом элементы-перехватчики событий мыши */
+    #MIK > g > g > rect:first-child + text + rect { fill: transparent; }
+    #MIK > g > g > rect { width: 100px; height: 20px; x: -50px; y: -10px; }
+    #MIK > g.tr > g > rect:first-child + text { transform: rotate(-180deg); }
+    #MIK > g > g > rect:first-child { fill: transparent; }
+    #MIK > g#Menu1 > g > rect:first-child { fill: white; }
+    /* Оформление ламелей (от программного style.fill отказался) */
+    #MIK > g > g > rect:first-child[data-sign-ix^="cursor"] { fill: lavender; }
+    #MIK > g > g > rect:first-child[data-sign-ix="-1"] { fill: whitesmoke; }
+    #MIK > g > g > rect:first-child[data-sign-ix="0"] { fill: lightgray; }
+    #MIK > g > g > rect:first-child[data-sign-ix="1"] { fill: palegreen; }
+    #MIK > g > g > rect:first-child[data-sign-ix="2"] { fill: palegreen; }
+    #MIK > g > g > rect:first-child[data-sign-ix="3"] { fill: palegreen; }
+    #MIK > g > g > rect:first-child[data-sign-ix="4"] { fill: palegreen; }
+    #MIK > g > g > rect:first-child[data-sign-ix="5"] { fill: palegreen; }
+    /* Оформление меток вход / выход */
+    #MIK > g[class^="t"] > g > text:last-child { stroke: black; stroke-width: 1px; font-size: 16px; }
+    #MIK > g.tn > g > text:last-child { transform: scale(1,  1) translate(65px, 0px); }
+    #MIK > g.tr > g > text:last-child { transform: scale(1, -1) translate(65px, 0px); }
+    /* Листинги программного кода */
+    div.CODE > pre { font-size: 1.00em; background-color: #E0FFFF; padding: 0.4em; }
+    div#Code_Log { display: none; }
+    div#CodeLog > pre > code > span { color: red; }
+</style>
+
+<style type="text/css" media="print">
+    body        { background-image: none; }
+    body > *    { display: none; }
+    body > svg  { display: block; }
+    div.CLLC    { display: block; page-break-after: always; }
+    div.CODE > pre { background-color: white; }
+</style>
+</head>
+<body>
+<p class="author">Клиначев Н.В.</p>
+<h1>Инструмент конфигурирования микроконтроллера MIK32 АМУР</h1>
+<p class="wrkfl">Рабочие файлы: [<a href="KNV32Cube.htm">Документация</a>] [MIK32Cube] [<a href="K1921VK01T-QFP208.htm">К1921ВК01Т</a>] [<a href="KA5001VK1A-PBGA400.htm">КА5001ВК1А</a>]<br>
+[<a href="MDR32F9Q2I-LQFP64.htm">К1986ВЕ92QI</a>] [<a href="MDR32F02FI-QFN88.htm">К1986ВК025</a>] [<a href="MDR32F1QI-LQFP144.htm">К1986ВЕ1QI</a>] [<a href="MDR1201GI-BGA144.htm">К1986ВК01GI</a>]<br>
+[<a href="LQFP100.htm">LQFP100</a>]</p>
+<p class="rJJJ">В ноябре 2021 года компания "Микрон" выпустила экспериментальную партию отечественного микроконтроллера на архитектуре RISC-V. Документация и библиотека драйверов периферии находятся в разработке. Было бы неплохо, если бы отечественным специалистам удалось повторить успех фирмы STMicroelectronics. Но в чём он заключается? Автор высоко оценивает качество "драйверов стандартной периферии" микроконтроллеров STM. И отмечает, что инструмент конфигурирования STM32Cube популярен у молодых разработчиков. Безусловно, визуальные средства оказывают существенную помощь. Но оптимальный баланс между "драйверами стандартной периферии" и "Кубом" фирме STMicroelectronics найти не удалось. Статус у графических инструментов должен быть исключительно вспомогательный. Главное – это работа с кодом. Другой аспект – размер инструментов. Каждый специалист, решающий задачу связанную микроконтроллером, должен помнить о конечном результате – о 8000 байтах, которые могут быть размещены в ПЗУ микроконтроллера. Это помогает формировать правильное отношение к цене решения задачи и к "волшебным" инструментам (к интегрированной среде разработки на 1.5 ГБ и к "Кубу", (по 600 МБ на микроконтроллер)). Нет адекватного инструмента – автор пишет собственный. Глаза уже не те, но приятные воспоминания о временах, когда на дискетке умещалось два компилятора, живы и греют душу.</p>
+<!-- По этому поводу можно высказывать разные мнения. Но адекватней всех – медики. Они утверждают – каждый день люди контактируют со смертельно опасными инфекциями. И вот попадает такая бактерия в кишечник. А её встречают местные жители – извини дорогая – квартира занята. -->
+<svg width="601" height="601" viewBox="-0.5 -0.5 601 601" xmlns="http://www.w3.org/2000/svg">
+<defs>
+    <pattern id="Grid10x10" width="20" height="20" patterntransform="translate(-0.5 -0.5)" patternUnits="userSpaceOnUse">
+    <path d="M0,0L1,0M0,10L1,10M10,0L11,0M10,10L11,10" transform="translate(0 0.5)" style="stroke:silver;stroke-width:1;"></path>
+    </pattern>
+</defs>
+<rect x="-0.5" y="-0.5" width="100%" height="100%" style="stroke-width:0;fill:url(#Grid10x10);" />
+<g id="MIK" transform="scale(1 1) translate(300 300) rotate(0)" style="stroke:#000;stroke-width:1;">
+    <rect x="-181" y="-181" width="362" height="362" rx="6" ry="6" style="stroke-width:1.5;fill:white;" />
+    <rect x="-150" y="-150" width="300" height="300" rx="6" ry="6" style="stroke-width:1.5;fill:azure;" />
+    <circle cx="-120" cy="120" r="5" style="stroke-width:1.5;fill:azure;" />
+    <text x="90" y="-120" style="font-size: 26px;">MIK32</text>
+    <text x="90" y="-90" style="font-size: 26px;">QFP64</text>
+    <g transform="rotate(-90) translate(-230 -150)" class="tn">
+        <g transform="translate(0 0)"><rect /><text>K</text><rect /><text>▷</text></g>
+        <g transform="translate(0 20)"><rect /><text>K</text><rect /><text>▷</text></g>
+        <g transform="translate(0 40)"><rect /><text>K</text><rect /><text>▷</text></g>
+        <g transform="translate(0 60)"><rect /><text>K</text><rect /><text>▷</text></g>
+        <g transform="translate(0 80)"><rect /><text>K</text><rect /><text>▷</text></g>
+        <g transform="translate(0 100)"><rect /><text>K</text><rect /><text>▷</text></g>
+        <g transform="translate(0 120)"><rect /><text>K</text><rect /><text>▷</text></g>
+        <g transform="translate(0 140)"><rect /><text>K</text><rect /><text>▷</text></g>
+        <g transform="translate(0 160)"><rect /><text>K</text><rect /><text>▷</text></g>
+        <g transform="translate(0 180)"><rect /><text>K</text><rect /><text>▷</text></g>
+        <g transform="translate(0 200)"><rect /><text>K</text><rect /><text>▷</text></g>
+        <g transform="translate(0 220)"><rect /><text>K</text><rect /><text>▷</text></g>
+        <g transform="translate(0 240)"><rect /><text>K</text><rect /><text>▷</text></g>
+        <g transform="translate(0 260)"><rect /><text>K</text><rect /><text>▷</text></g>
+        <g transform="translate(0 280)"><rect /><text>K</text><rect /><text>▷</text></g>
+        <g transform="translate(0 300)"><rect /><text>K</text><rect /><text>▷</text></g>
+    </g>
+    <g transform="rotate(-180) translate(-230 -150)" class="tr">
+        <g transform="translate(0 0)"><rect /><text>K</text><rect /><text>▷</text></g>
+        <g transform="translate(0 20)"><rect /><text>K</text><rect /><text>▷</text></g>
+        <g transform="translate(0 40)"><rect /><text>K</text><rect /><text>▷</text></g>
+        <g transform="translate(0 60)"><rect /><text>K</text><rect /><text>▷</text></g>
+        <g transform="translate(0 80)"><rect /><text>K</text><rect /><text>▷</text></g>
+        <g transform="translate(0 100)"><rect /><text>K</text><rect /><text>▷</text></g>
+        <g transform="translate(0 120)"><rect /><text>K</text><rect /><text>▷</text></g>
+        <g transform="translate(0 140)"><rect /><text>K</text><rect /><text>▷</text></g>
+        <g transform="translate(0 160)"><rect /><text>K</text><rect /><text>▷</text></g>
+        <g transform="translate(0 180)"><rect /><text>K</text><rect /><text>▷</text></g>
+        <g transform="translate(0 200)"><rect /><text>K</text><rect /><text>▷</text></g>
+        <g transform="translate(0 220)"><rect /><text>K</text><rect /><text>▷</text></g>
+        <g transform="translate(0 240)"><rect /><text>K</text><rect /><text>▷</text></g>
+        <g transform="translate(0 260)"><rect /><text>K</text><rect /><text>▷</text></g>
+        <g transform="translate(0 280)"><rect /><text>K</text><rect /><text>▷</text></g>
+        <g transform="translate(0 300)"><rect /><text>K</text><rect /><text>▷</text></g>
+    </g>
+    <g transform="rotate(-270) translate(-230 -150)" class="tr">
+        <g transform="translate(0 0)"><rect /><text>K</text><rect /><text>▷</text></g>
+        <g transform="translate(0 20)"><rect /><text>K</text><rect /><text>▷</text></g>
+        <g transform="translate(0 40)"><rect /><text>K</text><rect /><text>▷</text></g>
+        <g transform="translate(0 60)"><rect /><text>K</text><rect /><text>▷</text></g>
+        <g transform="translate(0 80)"><rect /><text>K</text><rect /><text>▷</text></g>
+        <g transform="translate(0 100)"><rect /><text>K</text><rect /><text>▷</text></g>
+        <g transform="translate(0 120)"><rect /><text>K</text><rect /><text>▷</text></g>
+        <g transform="translate(0 140)"><rect /><text>K</text><rect /><text>▷</text></g>
+        <g transform="translate(0 160)"><rect /><text>K</text><rect /><text>▷</text></g>
+        <g transform="translate(0 180)"><rect /><text>K</text><rect /><text>▷</text></g>
+        <g transform="translate(0 200)"><rect /><text>K</text><rect /><text>▷</text></g>
+        <g transform="translate(0 220)"><rect /><text>K</text><rect /><text>▷</text></g>
+        <g transform="translate(0 240)"><rect /><text>K</text><rect /><text>▷</text></g>
+        <g transform="translate(0 260)"><rect /><text>K</text><rect /><text>▷</text></g>
+        <g transform="translate(0 280)"><rect /><text>K</text><rect /><text>▷</text></g>
+        <g transform="translate(0 300)"><rect /><text>K</text><rect /><text>▷</text></g>
+    </g>
+    <g transform="rotate(0) translate(-230 -150)" class="tn">
+        <g transform="translate(0 0)"><rect /><text>K</text><rect /><text>▷</text></g>
+        <g transform="translate(0 20)"><rect /><text>K</text><rect /><text>▷</text></g>
+        <g transform="translate(0 40)"><rect /><text>K</text><rect /><text>▷</text></g>
+        <g transform="translate(0 60)"><rect /><text>K</text><rect /><text>▷</text></g>
+        <g transform="translate(0 80)"><rect /><text>K</text><rect /><text>▷</text></g>
+        <g transform="translate(0 100)"><rect /><text>K</text><rect /><text>▷</text></g>
+        <g transform="translate(0 120)"><rect /><text>K</text><rect /><text>▷</text></g>
+        <g transform="translate(0 140)"><rect /><text>K</text><rect /><text>▷</text></g>
+        <g transform="translate(0 160)"><rect /><text>K</text><rect /><text>▷</text></g>
+        <g transform="translate(0 180)"><rect /><text>K</text><rect /><text>▷</text></g>
+        <g transform="translate(0 200)"><rect /><text>K</text><rect /><text>▷</text></g>
+        <g transform="translate(0 220)"><rect /><text>K</text><rect /><text>▷</text></g>
+        <g transform="translate(0 240)"><rect /><text>K</text><rect /><text>▷</text></g>
+        <g transform="translate(0 260)"><rect /><text>K</text><rect /><text>▷</text></g>
+        <g transform="translate(0 280)"><rect /><text>K</text><rect /><text>▷</text></g>
+        <g transform="translate(0 300)"><rect /><text>K</text><rect /><text>▷</text></g>
+    </g>
+    <!-- Меню -->
+    <g id="Menu1" transform="translate(-0 -0)" style="display:none;">
+        <rect x="-280" y="-280" width="560" height="560" rx="8" ry="8" style="stroke-width:1.5;fill:lavender;display:none;fill-opacity:0.5;" />
+        <g transform="translate(0 -30)"><rect style="fill:lightgray;" /><text>Item 0</text><rect /></g>
+        <g transform="translate(0 -10)"><rect /><text>Item 1</text><rect /></g>
+        <g transform="translate(0 10)"><rect /><text>Item 2</text><rect /></g>
+        <g transform="translate(0 30)"><rect /><text>Item 3</text><rect /></g>
+        <g transform="translate(0 50)"><rect /><text>Item 4</text><rect /></g>
+        <g transform="translate(0 70)"><rect /><text>Item 5</text><rect /></g>
+    </g>
+</g>
+</svg>
+<p class="CCCC">Рис. 1. MIK32Cube – MIK32 Амур QFP64. Мастер настройки портов</p>
+<div id="FuncLog" class="CLLC CODE">
+<pre>
+<code class="C# hljs cpp">Листинг 1. Распечатка конфигурируемых ножек</code>
+</pre></div>
+<p class="rJJJ">Рисунок 1 – это прототип интерактивного инструмента, предназначенный для конфигурирования микроконтроллера MIK32. Прототип повторяет соответствующую функциональность Куба (MIK32Cube). На ножках написаны имена функций, которые назначаются после аппаратного сброса микросхемы. Проведите указатель мыши над ножками. В центре появиться меню выбора функций. Найдите и выберите ножку с нужной функцией. Переместите указатель мыши к меню. Выберите функцию. В отдельных случаях, в зависимости от функции, можно поменять режим работы порта – вход или выход. Рядом с ножками показаны соответствующие значки. Выберите функцию "порт ввода вывода общего назначения" (GPIO). Щёлкните указателем мыши по значку.</p>
+<p class="rJJJ">На 20220412 существуют лишь инженерные образцы микроконтроллера. Документация находится в разработке, физическим лицам не доступна. Поэтому представленный инструмент требует доработки. Читатель может сохранить данную веб-страницу на локальный диск своего компьютера и продолжить разработку. Сторонние скрипты и библиотеки не используются.</p>
+<div id="CodeLog" class="CLLC CODE">
+<pre>
+<code class="C# hljs cpp">/******************************************************************************
+* File Name :   main.c
+* Author    :   []
+* Version   :   1.1.0
+* Date      :   20210115
+* Target    :   MIK32 (RISC-V)
+* Project   :   []
+*
+******************************************************************************/
+#include "MIK32_cor.h"              // Таблица векторов. Адреса устройств
+#include "MIK32_clk.h"              // Драйвер тактового генератора
+#include "MIK32_it.h"               // Заглушки основных прерываний
+<span id="include" data-commonname="GPIO;TIM;ADC;DAC;UART;SPIFI;SPI;IIC">
+#include "MIK32_port.h"             // Драйвер портов ввода вывода
+#include "MIK32_tmr.h"              // Драйвер таймеров
+#include "MIK32_adc.h"              // Драйвер АЦ-преобразователя
+#include "MIK32_dac.h"              // Драйвер ЦА-преобразователя
+#include "MIK32_uart.h"             // Драйвер приёмопередатчика UART
+#include "MIK32_sspfi.h"            // Драйвер приёмопередатчика SPIFI
+#include "MIK32_spi.h"              // Драйвер приёмопередатчика SPI
+#include "MIK32_iic.h"              // Драйвер приёмопередатчика I2C
+#include "MIK32_dma.h"              // Контроллер прямого доступа в память
+</span>
+// Объявляем прототипы функций
+void Delay(int waitTicks);
+void MCU_Init(void);
+void MCU_Start(void);
+
+// Точка входа, отсюда начинается исполнение программы
+int main()
+{
+    // Конфигурируем мК (настроим "аппаратную машину состояний")
+    MCU_Init();
+
+    // TODO: Настроить внешние микросхемы подключенныек к мК
+    // TODO: Написать код инициализирующий приложение
+
+    // Запускаем мК (включаем "аппаратную машину состояний")
+    MCU_Start();
+
+    // Запускаем бесконечный цикл - Основной цикл приложения
+    while (1) {
+        __asm("    NOP");
+    }
+}
+
+/******************************************************************************
+* Description: Эту функцию принято делать на прерывании системного таймера
+******************************************************************************/
+void Delay(int waitTicks)
+{
+    int i;
+    for (i = 0; i &lt; waitTicks; i++)
+    {
+        __NOP();
+    }
+}
+
+/******************************************************************************
+* Description: Определяет таблицу векторов прерываний и настраивает приоритеты
+******************************************************************************/
+static void NVIC_Configuration(void) {
+}
+
+/******************************************************************************
+* Description: Включает тактирование устройств
+******************************************************************************/
+static void RCC_Configuration(void) {<span id="RCC" data-punitname="GPIO0;GPIO1;GPIO2;TIM32A;TIM32B;TIM16A;TIM16B;TIM16C;ADC;DAC;UART0;UART1;SPIFI;SPI0;SPI1;IIC0;IIC1">
+RST_CLK_PCLKcmd(GPIO0,  ENABLE);    // Порт A: GPIO-функция
+RST_CLK_PCLKcmd(GPIO1,  ENABLE);    // Порт B: GPIO-функция
+RST_CLK_PCLKcmd(GPIO2,  ENABLE);    // Порт C: GPIO-функция
+RST_CLK_PCLKcmd(TIM32A, ENABLE);    // 32-х разрядный таймер A
+RST_CLK_PCLKcmd(TIM32B, ENABLE);    // 32-х разрядный таймер B
+RST_CLK_PCLKcmd(TIM16A, ENABLE);    // 16-разрядный таймер A с ШИМ
+RST_CLK_PCLKcmd(TIM16B, ENABLE);    // 16-разрядный таймер B с ШИМ
+RST_CLK_PCLKcmd(TIM16C, ENABLE);    // 16-разрядный таймер C с ШИМ
+RST_CLK_PCLKcmd(ADC,    ENABLE);    // АЦ-преобразователь
+RST_CLK_PCLKcmd(DAC,    ENABLE);    // ЦА-преобразователь
+RST_CLK_PCLKcmd(UART0,  ENABLE);    // Приёмопередатчик UART0
+RST_CLK_PCLKcmd(UART1,  ENABLE);    // Приёмопередатчик UART1
+RST_CLK_PCLKcmd(SPIFI,  ENABLE);    // Приёмопередатчик SPIFI
+RST_CLK_PCLKcmd(SPI0,   ENABLE);    // Приёмопередатчик SPI0
+RST_CLK_PCLKcmd(SPI1,   ENABLE);    // Приёмопередатчик SPI1
+RST_CLK_PCLKcmd(IIC0,   ENABLE);    // Приёмопередатчик I2C0
+RST_CLK_PCLKcmd(IIC1,   ENABLE);    // Приёмопередатчик I2C1
+RST_CLK_PCLKcmd(DMA,    ENABLE);    // Контроллер прямого доступа в память
+</span>}
+
+/******************************************************************************
+* Description: Настраивает порты ввода / вывода
+******************************************************************************/
+static void GPIO_Configuration(void) {<span id="GPIO">
+</span>}
+
+/******************************************************************************
+* Description: Конфигурирует таймеры
+******************************************************************************/
+static void TMR_Configuration() {<span id="TMR">
+</span>}
+
+/******************************************************************************
+* Description: Конфигурирует АЦП
+******************************************************************************/
+static void ADC_Configuration(void) {<span id="ADC">
+</span>}
+
+/******************************************************************************
+* Description: Конфигурирует контроллер ПДП
+******************************************************************************/
+static void DMA_Configuration(void) {<span id="DMA">
+</span>}
+
+/******************************************************************************
+* Description: Конфигурирует ЦАП
+******************************************************************************/
+static void DAC_Configuration(void) {<span id="DAC">
+</span>}
+
+/******************************************************************************
+* Description: Задает последовательность конфигурирования устройств
+******************************************************************************/
+void MCU_Init() {
+    // TODO: Настроить условия входа в спящий режим (по инструкциям
+    // __WFI и __WFE) без остановки тактовых генераторов (HSI и HSE),
+    // чтобы по прерываниям системного таймера мК пробуждался без RESET
+
+    // TODO: Настроить прерывание системного таймера,
+    // чтобы драйверы внешних микросхем могли использовать Delay
+
+    // Включаем тактирование устройств
+    RCC_Configuration();
+    // Заполняем таблицу векторов прерываний
+    NVIC_Configuration();
+    // Конфигурируем порты ввода / вывода
+    GPIO_Configuration();
+    // Конфигурируем контроллеры ПДП
+    DMA_Configuration();
+    // Конфигурируем ЦАП-ы
+    DAC_Configuration();
+    // Конфигурируем АЦП
+    ADC_Configuration();
+    // Конфигурируем Таймеры
+    TMR_Configuration();
+}
+
+/******************************************************************************
+* Description: Включает периферийные устройства и разрешает прерывания
+******************************************************************************/
+void MCU_Start(void) {
+    // Включаем и разрешаем прерывания АЦП
+    // Включаем и разрешаем прерывания ПДП
+    // Включаем и разрешаем прерывания ЦАП
+    // Включаем и разрешаем прерывания TMR
+}
+
+/********************************** END OF FILE ******************************/</code>
+</pre></div>
+<h2>Литература</h2>
+<ol class="JJJJ" style="overflow-x: auto;text-align: justify;">
+<li>RISC-V микроконтроллер MIK32 АМУР. // Информационный раздел сайта ГК "Микрон". – URL: https://www.mcu.mikron.ru (дата обращения: 12.04.2022)</li>
+</ol>
+<p class="RRRR">19.05.2022, 12.04.2022</p>
+</body>
+</html>

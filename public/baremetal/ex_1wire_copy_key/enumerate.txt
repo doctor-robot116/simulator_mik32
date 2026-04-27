@@ -1,0 +1,25 @@
+0 0 0 0 1 1 1 1
+0 0 1 1 0 0 1 1
+0 1 0 1 0 1 0 1
+
+ld=-1 n=0 lz=-1    ROM=000
+0 dir=0 lz=0 n=1   ROM=000
+0 dir=0 lz=1 n=2   ROM=000
+0 dir=0 lz=2 n=3   ROM=000
+ld=2
+
+ld=2 n=0 lz=-1     ROM=000
+0 dir=0 lz=0 n=1   ROM=000
+0 dir=0 lz=1 n=2   ROM=000
+0 dir=1 lz=1 n=3   ROM=001
+
+ld=1 n=0 lz=-1     ROM=001
+0 dir=0 lz=0 n=1   ROM=001
+0 dir=1 lz=0 n=2   ROM=010
+0 dir=0 lz=2 n=3   ROM=010
+
+ld=2 n=0 lz=-1     ROM=010
+0 dir=0 lz=0 n=1   ROM=010
+0 dir=1 lz=0 n=2   ROM=010
+0 dir=1 lz=0 n=3   ROM=011
+

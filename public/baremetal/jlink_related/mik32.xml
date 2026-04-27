@@ -1,0 +1,10 @@
+<Database>
+  <Device>
+    <ChipInfo Vendor="MIKRON" Name="mik32" Core="JLINK_CORE_RV32" WorkRAMAddr="0x02000000" WorkRAMSize="0x4000" />
+    <FlashBankInfo Name="onboard EEPROM" BaseAddr="0x01000000" MaxSize="0x00002000" Loader="mik32_spiflash_EEPROM.elf" LoaderType="FLASH_ALGO_TYPE_OPEN" AlwaysPresent="1" />
+    <FlashBankInfo Name="SPI Flash" BaseAddr="0x80000000" AlwaysPresent="0">
+      <LoaderInfo Name="Winbond W25Q64JV" MaxSize="0x00800000" Loader="mik32_spiflash_W25Q64JV.elf" LoaderType="FLASH_ALGO_TYPE_OPEN" />
+      <LoaderInfo Name="Puya PY25Q128HA" MaxSize="0x01000000" Loader="mik32_spiflash_PY25Q128HA.elf" LoaderType="FLASH_ALGO_TYPE_OPEN" />
+    </FlashBankInfo>
+  </Device>
+</Database>

@@ -1,0 +1,10 @@
+*.o
+*.hex
+*.bin
+*.elf
+*.map
+*.a
+ex_picojpeg/*.jpg
+nul
+ex_picojpeg_2/db.h
+tools/ex_uploader

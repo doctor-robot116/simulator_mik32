@@ -1,0 +1,84 @@
+.PHONY: clean
+
+OPT_FLAGS_SPEED  = -Ofast -s -flto=auto -ffat-lto-objects
+OPT_FLAGS_SIZE   = -Os -s -flto=auto -ffat-lto-objects
+OPT_FLAGS_DEBUG  = -O0 -g
+OPT_FLAGS_COMMON = -march=rv32imc_zicsr -mabi=ilp32 -ffunction-sections -fdata-sections -fstrict-volatile-bitfields -fno-strict-aliasing -fno-common -fno-builtin-printf -nostartfiles -ffreestanding -nostdlib -nodefaultlibs
+
+
+all: speed
+debug: out.hex
+size: out.hex
+speed: out.hex
+
+debug: OPT_FLAGS = $(OPT_FLAGS_DEBUG)
+size: OPT_FLAGS = $(OPT_FLAGS_SIZE)
+speed: OPT_FLAGS = $(OPT_FLAGS_SPEED)
+upload: OPT_FLAGS = $(OPT_FLAGS_SPEED)
+
+debug: LC_TGT = debug
+size: LC_TGT = size
+speed: LC_TGT = speed
+upload: LC_TGT = speed
+
+debug: LD_SCRIPT = spifi.ld
+size: LD_SCRIPT = spifi.ld
+speed: LD_SCRIPT = spifi.ld
+upload: LD_SCRIPT = spifi.ld
+
+
+db.h:
+	find . -type f -name "db??.jpg" | xargs -i xxd -i {} | tee >> db.h
+	sed -i s/unsigned/const\ unsigned/ db.h
+
+
+out.hex: out.elf
+	riscv64-unknown-elf-objcopy -O ihex out.elf out.hex
+	riscv64-unknown-elf-objcopy -O binary out.elf out.bin
+	riscv64-unknown-elf-size out.elf
+
+
+out.elf: ../libbaremetal/lib/libc.a ../libbaremetal/lib/libm.a main.c ../devices/display.c db.h
+	riscv64-unknown-elf-gcc -DMIK32V2 \
+			../devices/display.c \
+			../devices/st7735.c \
+			main.c \
+			-I../libbaremetal/include \
+			-I../devices \
+			-I../fonts \
+			-I../utils \
+			-I../ \
+			$(OPT_FLAGS) \
+			$(OPT_FLAGS_COMMON) \
+			-Wall -Wextra \
+			-Wl,-T,../ld_scripts/$(LD_SCRIPT),-Map,out.elf.map,-gc-sections,--print-memory-usage \
+			-L../libbaremetal/lib \
+			-lc \
+			-o out.elf
+
+
+
+../libbaremetal/lib/libc.a:
+	$(MAKE) $(LC_TGT) -C ../libbaremetal
+
+../libbaremetal/lib/libm.a:
+	$(MAKE) $(LC_TGT) -C ../libbaremetal
+
+
+upload: out.hex ../tools/ex_uploader
+	../tools/ex_uploader /dev/ttyUSB0 ./out.bin
+	
+	
+ex_uploader: ../tools/ex_uploader.c
+	gcc ../tools/ex_uploader.c -O2 -s -Wall -Wextra -o ../tools/ex_uploader
+
+
+clean:
+	rm -f *.map \
+	      *.hex \
+	      *.elf \
+	      *.bin \
+	      ../tools/ex_uploader \
+	      ../tools/todfu \
+	      db.h
+	$(MAKE) -C ../libbaremetal clean

@@ -1,0 +1,191 @@
+{
+  "id": "k1948vk018",
+  "name": "К1948ВК018 / К1948ВК015",
+  "vendor": "АО «Микрон»",
+  "package": "LQFP64",
+  "pinCount": 64,
+  "initFn": "K1948_GPIO_Init",
+  "_note": "Предварительная разметка выводов (scaffold). Уточнить по официальному даташиту АО «Микрон». Структура совместима с движком pin-configurator.html.",
+  "pins": [
+    { "n": 1,  "name": "PA0",  "type": "IO",  "desc": "Порт A, разряд 0",  "functions": [
+      { "name": "GPIOA_0",   "type": "IO", "mode": "AF1", "desc": "GPIO" },
+      { "name": "USART1_TX", "type": "O",  "mode": "AF2", "desc": "UART1 передача" },
+      { "name": "TIM2_CH1",  "type": "IO", "mode": "AF3", "desc": "Таймер 2, канал 1" }
+    ]},
+    { "n": 2,  "name": "PA1",  "type": "IO",  "desc": "Порт A, разряд 1",  "functions": [
+      { "name": "GPIOA_1",   "type": "IO", "mode": "AF1", "desc": "GPIO" },
+      { "name": "USART1_RX", "type": "I",  "mode": "AF2", "desc": "UART1 приём" },
+      { "name": "TIM2_CH2",  "type": "IO", "mode": "AF3", "desc": "Таймер 2, канал 2" }
+    ]},
+    { "n": 3,  "name": "PA2",  "type": "IO",  "desc": "Порт A, разряд 2",  "functions": [
+      { "name": "GPIOA_2",   "type": "IO", "mode": "AF1", "desc": "GPIO" },
+      { "name": "ADC_IN0",   "type": "AI", "mode": "Analog", "desc": "АЦП, вход 0" },
+      { "name": "TIM3_CH1",  "type": "IO", "mode": "AF3", "desc": "Таймер 3, канал 1" }
+    ]},
+    { "n": 4,  "name": "PA3",  "type": "IO",  "desc": "Порт A, разряд 3",  "functions": [
+      { "name": "GPIOA_3",   "type": "IO", "mode": "AF1", "desc": "GPIO" },
+      { "name": "ADC_IN1",   "type": "AI", "mode": "Analog", "desc": "АЦП, вход 1" },
+      { "name": "TIM3_CH2",  "type": "IO", "mode": "AF3", "desc": "Таймер 3, канал 2" }
+    ]},
+    { "n": 5,  "name": "VSS",  "type": "PWR", "desc": "Цифровая земля" , "functions": [] },
+    { "n": 6,  "name": "VDD",  "type": "PWR", "desc": "Питание +3.3 В", "functions": [] },
+    { "n": 7,  "name": "PA4",  "type": "IO",  "desc": "Порт A, разряд 4",  "functions": [
+      { "name": "GPIOA_4",   "type": "IO", "mode": "AF1", "desc": "GPIO" },
+      { "name": "SPI1_NSS",  "type": "IO", "mode": "AF2", "desc": "SPI1, выбор ведомого" },
+      { "name": "ADC_IN2",   "type": "AI", "mode": "Analog", "desc": "АЦП, вход 2" }
+    ]},
+    { "n": 8,  "name": "PA5",  "type": "IO",  "desc": "Порт A, разряд 5",  "functions": [
+      { "name": "GPIOA_5",   "type": "IO", "mode": "AF1", "desc": "GPIO" },
+      { "name": "SPI1_SCK",  "type": "O",  "mode": "AF2", "desc": "SPI1 тактовый" },
+      { "name": "ADC_IN3",   "type": "AI", "mode": "Analog", "desc": "АЦП, вход 3" }
+    ]},
+    { "n": 9,  "name": "PA6",  "type": "IO",  "desc": "Порт A, разряд 6",  "functions": [
+      { "name": "GPIOA_6",   "type": "IO", "mode": "AF1", "desc": "GPIO" },
+      { "name": "SPI1_MISO", "type": "I",  "mode": "AF2", "desc": "SPI1 MISO" },
+      { "name": "TIM4_CH1",  "type": "IO", "mode": "AF3", "desc": "Таймер 4, канал 1" }
+    ]},
+    { "n": 10, "name": "PA7",  "type": "IO",  "desc": "Порт A, разряд 7",  "functions": [
+      { "name": "GPIOA_7",   "type": "IO", "mode": "AF1", "desc": "GPIO" },
+      { "name": "SPI1_MOSI", "type": "O",  "mode": "AF2", "desc": "SPI1 MOSI" },
+      { "name": "TIM4_CH2",  "type": "IO", "mode": "AF3", "desc": "Таймер 4, канал 2" }
+    ]},
+    { "n": 11, "name": "PB0",  "type": "IO",  "desc": "Порт B, разряд 0",  "functions": [
+      { "name": "GPIOB_0",   "type": "IO", "mode": "AF1", "desc": "GPIO" },
+      { "name": "I2C1_SCL",  "type": "IO", "mode": "AF2", "desc": "I2C1 тактовая" }
+    ]},
+    { "n": 12, "name": "PB1",  "type": "IO",  "desc": "Порт B, разряд 1",  "functions": [
+      { "name": "GPIOB_1",   "type": "IO", "mode": "AF1", "desc": "GPIO" },
+      { "name": "I2C1_SDA",  "type": "IO", "mode": "AF2", "desc": "I2C1 данные" }
+    ]},
+    { "n": 13, "name": "PB2",  "type": "IO",  "desc": "Порт B, разряд 2",  "functions": [
+      { "name": "GPIOB_2",   "type": "IO", "mode": "AF1", "desc": "GPIO" },
+      { "name": "USART2_TX", "type": "O",  "mode": "AF2", "desc": "UART2 передача" }
+    ]},
+    { "n": 14, "name": "PB3",  "type": "IO",  "desc": "Порт B, разряд 3",  "functions": [
+      { "name": "GPIOB_3",   "type": "IO", "mode": "AF1", "desc": "GPIO" },
+      { "name": "USART2_RX", "type": "I",  "mode": "AF2", "desc": "UART2 приём" }
+    ]},
+    { "n": 15, "name": "PB4",  "type": "IO",  "desc": "Порт B, разряд 4",  "functions": [
+      { "name": "GPIOB_4",   "type": "IO", "mode": "AF1", "desc": "GPIO" }
+    ]},
+    { "n": 16, "name": "PB5",  "type": "IO",  "desc": "Порт B, разряд 5",  "functions": [
+      { "name": "GPIOB_5",   "type": "IO", "mode": "AF1", "desc": "GPIO" }
+    ]},
+    { "n": 17, "name": "VSS",  "type": "PWR", "desc": "Цифровая земля", "functions": [] },
+    { "n": 18, "name": "VDD",  "type": "PWR", "desc": "Питание +3.3 В", "functions": [] },
+    { "n": 19, "name": "OSC_IN",  "type": "FIXED", "desc": "Вход кварцевого резонатора", "functions": [] },
+    { "n": 20, "name": "OSC_OUT", "type": "FIXED", "desc": "Выход кварцевого резонатора", "functions": [] },
+    { "n": 21, "name": "NRST",   "type": "FIXED", "desc": "Сброс (активный низкий)",   "functions": [] },
+    { "n": 22, "name": "BOOT0",  "type": "FIXED", "desc": "Выбор источника загрузки",   "functions": [] },
+    { "n": 23, "name": "PB6",  "type": "IO",  "desc": "Порт B, разряд 6",  "functions": [
+      { "name": "GPIOB_6",   "type": "IO", "mode": "AF1", "desc": "GPIO" }
+    ]},
+    { "n": 24, "name": "PB7",  "type": "IO",  "desc": "Порт B, разряд 7",  "functions": [
+      { "name": "GPIOB_7",   "type": "IO", "mode": "AF1", "desc": "GPIO" }
+    ]},
+    { "n": 25, "name": "PC0",  "type": "IO",  "desc": "Порт C, разряд 0",  "functions": [
+      { "name": "GPIOC_0",   "type": "IO", "mode": "AF1", "desc": "GPIO" },
+      { "name": "ADC_IN4",   "type": "AI", "mode": "Analog", "desc": "АЦП, вход 4" }
+    ]},
+    { "n": 26, "name": "PC1",  "type": "IO",  "desc": "Порт C, разряд 1",  "functions": [
+      { "name": "GPIOC_1",   "type": "IO", "mode": "AF1", "desc": "GPIO" },
+      { "name": "ADC_IN5",   "type": "AI", "mode": "Analog", "desc": "АЦП, вход 5" }
+    ]},
+    { "n": 27, "name": "PC2",  "type": "IO",  "desc": "Порт C, разряд 2",  "functions": [
+      { "name": "GPIOC_2",   "type": "IO", "mode": "AF1", "desc": "GPIO" }
+    ]},
+    { "n": 28, "name": "PC3",  "type": "IO",  "desc": "Порт C, разряд 3",  "functions": [
+      { "name": "GPIOC_3",   "type": "IO", "mode": "AF1", "desc": "GPIO" }
+    ]},
+    { "n": 29, "name": "VDDA", "type": "PWR", "desc": "Питание АЦП", "functions": [] },
+    { "n": 30, "name": "VSSA", "type": "PWR", "desc": "Земля АЦП",   "functions": [] },
+    { "n": 31, "name": "PC4",  "type": "IO",  "desc": "Порт C, разряд 4",  "functions": [
+      { "name": "GPIOC_4",   "type": "IO", "mode": "AF1", "desc": "GPIO" }
+    ]},
+    { "n": 32, "name": "PC5",  "type": "IO",  "desc": "Порт C, разряд 5",  "functions": [
+      { "name": "GPIOC_5",   "type": "IO", "mode": "AF1", "desc": "GPIO" }
+    ]},
+    { "n": 33, "name": "PC6",  "type": "IO",  "desc": "Порт C, разряд 6",  "functions": [
+      { "name": "GPIOC_6",   "type": "IO", "mode": "AF1", "desc": "GPIO" }
+    ]},
+    { "n": 34, "name": "PC7",  "type": "IO",  "desc": "Порт C, разряд 7",  "functions": [
+      { "name": "GPIOC_7",   "type": "IO", "mode": "AF1", "desc": "GPIO" }
+    ]},
+    { "n": 35, "name": "PC8",  "type": "IO",  "desc": "Порт C, разряд 8",  "functions": [
+      { "name": "GPIOC_8",   "type": "IO", "mode": "AF1", "desc": "GPIO" }
+    ]},
+    { "n": 36, "name": "PC9",  "type": "IO",  "desc": "Порт C, разряд 9",  "functions": [
+      { "name": "GPIOC_9",   "type": "IO", "mode": "AF1", "desc": "GPIO" }
+    ]},
+    { "n": 37, "name": "PC10", "type": "IO",  "desc": "Порт C, разряд 10", "functions": [
+      { "name": "GPIOC_10",  "type": "IO", "mode": "AF1", "desc": "GPIO" }
+    ]},
+    { "n": 38, "name": "PC11", "type": "IO",  "desc": "Порт C, разряд 11", "functions": [
+      { "name": "GPIOC_11",  "type": "IO", "mode": "AF1", "desc": "GPIO" }
+    ]},
+    { "n": 39, "name": "PC12", "type": "IO",  "desc": "Порт C, разряд 12", "functions": [
+      { "name": "GPIOC_12",  "type": "IO", "mode": "AF1", "desc": "GPIO" }
+    ]},
+    { "n": 40, "name": "PC13", "type": "IO",  "desc": "Порт C, разряд 13", "functions": [
+      { "name": "GPIOC_13",  "type": "IO", "mode": "AF1", "desc": "GPIO" }
+    ]},
+    { "n": 41, "name": "PC14", "type": "IO",  "desc": "Порт C, разряд 14", "functions": [
+      { "name": "GPIOC_14",  "type": "IO", "mode": "AF1", "desc": "GPIO" }
+    ]},
+    { "n": 42, "name": "PC15", "type": "IO",  "desc": "Порт C, разряд 15", "functions": [
+      { "name": "GPIOC_15",  "type": "IO", "mode": "AF1", "desc": "GPIO" }
+    ]},
+    { "n": 43, "name": "VSS",  "type": "PWR", "desc": "Цифровая земля", "functions": [] },
+    { "n": 44, "name": "VDD",  "type": "PWR", "desc": "Питание +3.3 В", "functions": [] },
+    { "n": 45, "name": "PD0",  "type": "IO",  "desc": "Порт D, разряд 0",  "functions": [
+      { "name": "GPIOD_0",   "type": "IO", "mode": "AF1", "desc": "GPIO" },
+      { "name": "CAN_RX",    "type": "I",  "mode": "AF2", "desc": "CAN приём" }
+    ]},
+    { "n": 46, "name": "PD1",  "type": "IO",  "desc": "Порт D, разряд 1",  "functions": [
+      { "name": "GPIOD_1",   "type": "IO", "mode": "AF1", "desc": "GPIO" },
+      { "name": "CAN_TX",    "type": "O",  "mode": "AF2", "desc": "CAN передача" }
+    ]},
+    { "n": 47, "name": "PD2",  "type": "IO",  "desc": "Порт D, разряд 2",  "functions": [
+      { "name": "GPIOD_2",   "type": "IO", "mode": "AF1", "desc": "GPIO" }
+    ]},
+    { "n": 48, "name": "PD3",  "type": "IO",  "desc": "Порт D, разряд 3",  "functions": [
+      { "name": "GPIOD_3",   "type": "IO", "mode": "AF1", "desc": "GPIO" }
+    ]},
+    { "n": 49, "name": "PD4",  "type": "IO",  "desc": "Порт D, разряд 4",  "functions": [
+      { "name": "GPIOD_4",   "type": "IO", "mode": "AF1", "desc": "GPIO" }
+    ]},
+    { "n": 50, "name": "PD5",  "type": "IO",  "desc": "Порт D, разряд 5",  "functions": [
+      { "name": "GPIOD_5",   "type": "IO", "mode": "AF1", "desc": "GPIO" }
+    ]},
+    { "n": 51, "name": "PD6",  "type": "IO",  "desc": "Порт D, разряд 6",  "functions": [
+      { "name": "GPIOD_6",   "type": "IO", "mode": "AF1", "desc": "GPIO" }
+    ]},
+    { "n": 52, "name": "PD7",  "type": "IO",  "desc": "Порт D, разряд 7",  "functions": [
+      { "name": "GPIOD_7",   "type": "IO", "mode": "AF1", "desc": "GPIO" }
+    ]},
+    { "n": 53, "name": "JTMS", "type": "FIXED", "desc": "JTAG TMS", "functions": [] },
+    { "n": 54, "name": "JTCK", "type": "FIXED", "desc": "JTAG TCK", "functions": [] },
+    { "n": 55, "name": "JTDI", "type": "FIXED", "desc": "JTAG TDI", "functions": [] },
+    { "n": 56, "name": "JTDO", "type": "FIXED", "desc": "JTAG TDO", "functions": [] },
+    { "n": 57, "name": "PE0",  "type": "IO",  "desc": "Порт E, разряд 0",  "functions": [
+      { "name": "GPIOE_0",   "type": "IO", "mode": "AF1", "desc": "GPIO" }
+    ]},
+    { "n": 58, "name": "PE1",  "type": "IO",  "desc": "Порт E, разряд 1",  "functions": [
+      { "name": "GPIOE_1",   "type": "IO", "mode": "AF1", "desc": "GPIO" }
+    ]},
+    { "n": 59, "name": "PE2",  "type": "IO",  "desc": "Порт E, разряд 2",  "functions": [
+      { "name": "GPIOE_2",   "type": "IO", "mode": "AF1", "desc": "GPIO" }
+    ]},
+    { "n": 60, "name": "PE3",  "type": "IO",  "desc": "Порт E, разряд 3",  "functions": [
+      { "name": "GPIOE_3",   "type": "IO", "mode": "AF1", "desc": "GPIO" }
+    ]},
+    { "n": 61, "name": "PE4",  "type": "IO",  "desc": "Порт E, разряд 4",  "functions": [
+      { "name": "GPIOE_4",   "type": "IO", "mode": "AF1", "desc": "GPIO" }
+    ]},
+    { "n": 62, "name": "PE5",  "type": "IO",  "desc": "Порт E, разряд 5",  "functions": [
+      { "name": "GPIOE_5",   "type": "IO", "mode": "AF1", "desc": "GPIO" }
+    ]},
+    { "n": 63, "name": "VSS",  "type": "PWR", "desc": "Цифровая земля", "functions": [] },
+    { "n": 64, "name": "VDD",  "type": "PWR", "desc": "Питание +3.3 В", "functions": [] }
+  ]
+}
